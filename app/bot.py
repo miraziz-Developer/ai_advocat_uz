@@ -1,5 +1,6 @@
 """Telegram handlers: menu, legal chat, document analysis, paid document drafting, receipt payments."""
 import hashlib
+import os
 import html
 import io
 import json
@@ -345,7 +346,8 @@ async def stats(message: Message) -> None:
     s = await db.stats()
     await message.answer(f"👥 Foydalanuvchilar: {s['users']}\n📚 Qonunlar: {s['laws']} ({s['chunks']} bo'lak, "
                          f"{s['embedded']} tasi ma'no-qidiruvga tayyor)\n"
-                         f"💰 To'lovlar: {s['paid']} ta, {s['revenue']:,} so'm".replace(",", " "))
+                         f"💰 To'lovlar: {s['paid']} ta, {s['revenue']:,} so'm\n".replace(",", " ")
+                         + f"🔖 Versiya: {os.environ.get('RENDER_GIT_COMMIT', 'local')[:7]}")
 
 
 @router.message(Command("credit"), F.from_user.id.in_(config.ADMIN_IDS))
