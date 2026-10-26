@@ -93,7 +93,7 @@ async def search_query(user_id: int, text: str) -> str:
               "so'zlarni yozma. Faqat atamalarni qaytar.")
     try:
         q = await asyncio.wait_for(llm.generate(prompt, system="Sen huquqiy qidiruv so'rovlarini tuzasan.",
-                                                models=config.LITE_MODELS, timeout=8), 18)
+                                                models=config.LITE_MODELS, timeout=12), 30)
     except Exception:
         q = ""  # retrieval still works on the raw text
     return normalize(q or text)
@@ -117,6 +117,9 @@ _embed_paused_until = 0.0
 async def retrieve(query: str) -> list:
     global _embed_paused_until
     vector = None
+    if time.monotonic() >= _embed_paused_until and await db.count_without_embedding():
+        # Partial coverage would pull every answer toward the few codes that already have embeddings.
+        _embed_paused_until = time.monotonic() + 600
     if time.monotonic() >= _embed_paused_until:
         try:
             [vector] = await llm.embed([query], task="RETRIEVAL_QUERY", wait=False)
