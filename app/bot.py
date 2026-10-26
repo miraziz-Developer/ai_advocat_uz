@@ -340,7 +340,8 @@ async def revoke(cb: CallbackQuery, bot: Bot) -> None:
 @router.message(Command("stats"), F.from_user.id.in_(config.ADMIN_IDS))
 async def stats(message: Message) -> None:
     s = await db.stats()
-    await message.answer(f"👥 Foydalanuvchilar: {s['users']}\n📚 Qonunlar: {s['laws']} ({s['chunks']} bo'lak)\n"
+    await message.answer(f"👥 Foydalanuvchilar: {s['users']}\n📚 Qonunlar: {s['laws']} ({s['chunks']} bo'lak, "
+                         f"{s['embedded']} tasi ma'no-qidiruvga tayyor)\n"
                          f"💰 To'lovlar: {s['paid']} ta, {s['revenue']:,} so'm".replace(",", " "))
 
 
@@ -395,6 +396,7 @@ async def chat(message: Message, bot: Bot) -> None:
     if not await quota_ok(message):
         return
     await db.ensure_user(message.from_user.id)
+    await message.answer("⏳ Qonunlarni ko'rib chiqyapman, 15-30 soniya...")
     try:
         async with ChatActionSender.typing(bot=bot, chat_id=message.chat.id):
             reply = await rag.answer(message.from_user.id, message.text[:4000])

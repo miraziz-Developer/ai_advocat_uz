@@ -61,12 +61,14 @@ async def embed(texts: list[str], task: str = "RETRIEVAL_DOCUMENT", wait: bool =
 _FALLBACK_CODES = {404, 429, 500, 503, 504}
 
 
-async def _generate_with_fallback(models: list[str], contents, cfg: types.GenerateContentConfig):
-    """Free-tier models are often overloaded (503); move on to the next model instead of failing."""
+async def _generate_with_fallback(models: list[str], contents, cfg: types.GenerateContentConfig, timeout: float):
+    """Free-tier models are often overloaded (503) or hang without answering; give each model `timeout`
+    seconds, then move on to the next one instead of making the user wait minutes."""
     last: Exception | None = None
     for model in models:
         try:
-            return await client().aio.models.generate_content(model=model, contents=contents, config=cfg)
+            return await asyncio.wait_for(
+                client().aio.models.generate_content(model=model, contents=contents, config=cfg), timeout)
         except errors.APIError as exc:
             if exc.code not in _FALLBACK_CODES:
                 raise
@@ -78,17 +80,25 @@ async def _generate_with_fallback(models: list[str], contents, cfg: types.Genera
     raise last or RuntimeError("no models configured")
 
 
-async def generate(contents, system: str, models: list[str] | None = None, temperature: float = 0.2) -> str:
-    cfg = types.GenerateContentConfig(system_instruction=system, temperature=temperature)
-    resp = await _generate_with_fallback(models or config.CHAT_MODELS, contents, cfg)
+_FAST_THINKING = types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW)  # long "thinking" costs ~2x latency
+
+
+async def generate(contents, system: str, models: list[str] | None = None, temperature: float = 0.2,
+                   timeout: float = 25) -> str:
+    if models is None:
+        cfg = types.GenerateContentConfig(system_instruction=system, temperature=temperature, thinking_config=_FAST_THINKING)
+    else:  # lite models: no thinking config (not all of them accept it)
+        cfg = types.GenerateContentConfig(system_instruction=system, temperature=temperature)
+    resp = await _generate_with_fallback(models or config.CHAT_MODELS, contents, cfg, timeout)
     return (resp.text or "").strip()
 
 
 async def generate_json(contents, system: str, schema: dict, models: list[str] | None = None) -> dict:
     cfg = types.GenerateContentConfig(
         system_instruction=system, temperature=0, response_mime_type="application/json", response_schema=schema,
+        thinking_config=_FAST_THINKING,
     )
-    resp = await _generate_with_fallback(models or config.CHAT_MODELS, contents, cfg)
+    resp = await _generate_with_fallback(models or config.CHAT_MODELS, contents, cfg, 60)
     return json.loads(resp.text or "{}")
 
 

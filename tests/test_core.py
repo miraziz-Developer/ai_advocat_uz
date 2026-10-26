@@ -52,7 +52,8 @@ def test_chunks_split_long_articles():
 
 
 def test_or_query():
-    assert db.or_query("Mehnat shartnomasi 15-modda o'z") == "mehnat | shartnomasi | 15 | modda"
+    assert db.or_query("Mehnat shartnomasi 15-modda o'z") == "mehn:* | shartn:* | 15"
+    assert db.or_query("bolam aliment qancha") == "bola:* | alime:*"
 
 
 def _row(n):

@@ -1,4 +1,5 @@
 """Retrieval-augmented answers: every legal claim must come from lex.uz text stored in the DB."""
+import asyncio
 import datetime as dt
 import logging
 import re
@@ -80,14 +81,18 @@ def short_title(title: str) -> str:
 
 
 async def search_query(user_id: int, text: str) -> str:
-    """Turns a chatty follow-up ('unda nima qilay?') into a standalone legal search query."""
+    """Turns everyday wording ('telefonimni o'g'irlab ketishdi') and follow-ups ('unda nima qilay?') into a
+    standalone query in legal terms ("o'g'rilik jinoyat kodeksi"); keyword search depends on it."""
     rows = await db.history(user_id, limit=4)
     convo = "\n".join(f"{r['role']}: {r['content'][:600]}" for r in rows)
     prompt = (f"Suhbat:\n{convo}\n\nOxirgi xabar: {text}\n\n"
               "Shu xabar bo'yicha O'zbekiston qonunlaridan tegishli moddalarni qidirish uchun o'zbek (lotin) "
-              "tilida 8-20 so'zli huquqiy qidiruv so'rovini yoz. Faqat so'rovning o'zini qaytar.")
+              "tilida 3-6 ta aniq huquqiy atama yoz (masalan: o'g'rilik; aliment bola; ish haqi to'lanmasligi). "
+              "Qonun matnida qanday yozilsa shunday yoz. \"O'zbekiston\", \"kodeks\", \"modda\" kabi umumiy "
+              "so'zlarni yozma. Faqat atamalarni qaytar.")
     try:
-        q = await llm.generate(prompt, system="Sen huquqiy qidiruv so'rovlarini tuzasan.", models=config.LITE_MODELS)
+        q = await asyncio.wait_for(llm.generate(prompt, system="Sen huquqiy qidiruv so'rovlarini tuzasan.",
+                                                models=config.LITE_MODELS, timeout=8), 18)
     except Exception:
         q = ""  # retrieval still works on the raw text
     return normalize(q or text)

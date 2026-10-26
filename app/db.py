@@ -23,9 +23,13 @@ CREATE TABLE IF NOT EXISTS chunks (
     heading   TEXT NOT NULL,
     anchor    BIGINT,
     body      TEXT NOT NULL,
-    embedding vector(768) NOT NULL,
-    tsv       tsvector GENERATED ALWAYS AS (to_tsvector('simple', article || ' ' || body)) STORED
+    embedding vector(768),  -- NULL until backfilled (free-tier embedding quota is ~1000/day)
+    -- apostrophes removed so o'g'irlik is one word (ogirlik), matching or_query()
+    tsv       tsvector GENERATED ALWAYS AS (
+        setweight(to_tsvector('simple', replace(article, '''', '')), 'A') ||  -- "169-modda. O'g'rilik" says what it is about
+        setweight(to_tsvector('simple', replace(body, '''', '')), 'D')) STORED
 );
+ALTER TABLE chunks ALTER COLUMN embedding DROP NOT NULL;
 CREATE INDEX IF NOT EXISTS chunks_embedding_idx ON chunks USING hnsw (embedding vector_cosine_ops);
 CREATE INDEX IF NOT EXISTS chunks_tsv_idx ON chunks USING gin (tsv);
 CREATE INDEX IF NOT EXISTS chunks_doc_idx ON chunks (doc_id);
@@ -73,8 +77,26 @@ async def pool() -> asyncpg.Pool:
     global _pool
     if _pool is None:
         # statement_cache_size=0 keeps it working behind PgBouncer (Supabase/Neon poolers).
-        _pool = await asyncpg.create_pool(config.DATABASE_URL, min_size=1, max_size=5, statement_cache_size=0)
+        # Neon closes idle connections (and suspends compute after 5 min), so never reuse a connection
+        # that sat idle while an AI call was running.
+        _pool = await asyncpg.create_pool(
+            config.DATABASE_URL, min_size=0, max_size=5, statement_cache_size=0,
+            max_inactive_connection_lifetime=30, command_timeout=30,
+        )
     return _pool
+
+
+_DROPPED = (asyncpg.ConnectionDoesNotExistError, asyncpg.InterfaceError, ConnectionError, OSError)
+
+
+async def _run(method: str, *args):
+    """Single-statement call with one retry when the server dropped the connection before answering."""
+    for attempt in range(2):
+        try:
+            return await getattr(await pool(), method)(*args)
+        except _DROPPED:
+            if attempt:
+                raise
 
 
 async def init() -> None:
@@ -89,11 +111,12 @@ def vec(values: list[float]) -> str:
 # ---------- laws ----------
 
 async def law_hash(doc_id: int) -> str | None:
-    return await (await pool()).fetchval("SELECT content_hash FROM laws WHERE doc_id=$1", doc_id)
+    return await _run("fetchval", "SELECT content_hash FROM laws WHERE doc_id=$1", doc_id)
 
 
 async def replace_law(doc_id: int, title: str, url: str, content_hash: str, rows: list[tuple]) -> None:
-    """rows: (article, heading, anchor, body, embedding). Atomic: old version stays until the new one is complete."""
+    """rows: (article, heading, anchor, body). Atomic: old version stays until the new one is complete.
+    Embeddings are filled in later by set_embeddings()."""
     p = await pool()
     async with p.acquire() as con, con.transaction():
         await con.execute("DELETE FROM laws WHERE doc_id=$1", doc_id)
@@ -102,9 +125,26 @@ async def replace_law(doc_id: int, title: str, url: str, content_hash: str, rows
             doc_id, title, url, content_hash,
         )
         await con.executemany(
-            "INSERT INTO chunks (doc_id, article, heading, anchor, body, embedding) VALUES ($1,$2,$3,$4,$5,$6::vector)",
-            [(doc_id, a, h, anc, b, vec(e)) for a, h, anc, b, e in rows],
+            "INSERT INTO chunks (doc_id, article, heading, anchor, body) VALUES ($1,$2,$3,$4,$5)",
+            [(doc_id, *row) for row in rows],
         )
+
+
+async def chunks_without_embedding(limit: int) -> list[asyncpg.Record]:
+    return await _run("fetch",
+        """SELECT c.id, c.article, c.heading, c.body, l.title FROM chunks c JOIN laws l USING (doc_id)
+           WHERE c.embedding IS NULL ORDER BY c.id LIMIT $1""", limit,
+    )
+
+
+async def count_without_embedding() -> int:
+    return await _run("fetchval", "SELECT count(*) FROM chunks WHERE embedding IS NULL")
+
+
+async def set_embeddings(pairs: list[tuple[int, list[float]]]) -> None:
+    await _run("executemany",
+        "UPDATE chunks SET embedding=$2::vector WHERE id=$1", [(i, vec(e)) for i, e in pairs]
+    )
 
 
 async def search(query_embedding: list[float] | None, query_text: str, limit: int = 8) -> list[asyncpg.Record]:
@@ -113,11 +153,11 @@ async def search(query_embedding: list[float] | None, query_text: str, limit: in
     sql = """
     WITH v AS (
         SELECT id, row_number() OVER (ORDER BY embedding <=> $1::vector) AS r
-        FROM chunks WHERE $1::vector IS NOT NULL ORDER BY embedding <=> $1::vector LIMIT 30
+        FROM chunks WHERE $1::vector IS NOT NULL AND embedding IS NOT NULL ORDER BY embedding <=> $1::vector LIMIT 30
     ), k AS (
-        SELECT id, row_number() OVER (ORDER BY ts_rank(tsv, q) DESC) AS r
+        SELECT id, row_number() OVER (ORDER BY ts_rank(tsv, q, 1) DESC) AS r
         FROM chunks, to_tsquery('simple', $2) q
-        WHERE tsv @@ q ORDER BY ts_rank(tsv, q) DESC LIMIT 30
+        WHERE tsv @@ q ORDER BY ts_rank(tsv, q, 1) DESC LIMIT 30
     ), fused AS (
         SELECT id, sum(1.0 / (60 + r)) AS score FROM (SELECT * FROM v UNION ALL SELECT * FROM k) x
         GROUP BY id ORDER BY score DESC LIMIT $3
@@ -127,43 +167,57 @@ async def search(query_embedding: list[float] | None, query_text: str, limit: in
     ORDER BY f.score DESC
     """
     embedding = vec(query_embedding) if query_embedding else None
-    return await (await pool()).fetch(sql, embedding, or_query(query_text), limit)
+    return await _run("fetch", sql, embedding, or_query(query_text), limit)
+
+
+_STOP = {"nima", "qanday", "qancha", "qilish", "qilay", "kerak", "bilan", "uchun", "ladi", "bormi", "mumkin",
+         "menga", "mening", "meni", "men", "edi", "yoki", "lekin", "agar", "shu", "ham", "emas", "nimaga", "qayerga",
+         # words present in almost every article drown the specific ones
+         "ozbekiston", "respublikasi", "respublikasining", "respublika", "kodeks", "kodeksi", "kodeksiga", "modda",
+         "moddasi", "moddalar", "qonun", "qonuni", "qonunchilik", "qonunchiligi", "belgilangan", "tartibi", "tartibda",
+         "tahlili", "choralari", "huquqiy", "boyicha", "togrisida", "togrisidagi", "jazo", "jazosi", "jinoyat",
+         "jinoyati", "beriladi", "javobgarlik"}
 
 
 def or_query(text: str) -> str:
-    """Any-word match ('mehnat | shartnoma | ...'); AND of 15 words would almost never match."""
-    words = dict.fromkeys(w for w in re.findall(r"\w+", text.lower()) if len(w) >= 3 or w.isdigit())
-    return " | ".join(words)
+    """Any-word prefix match ('mehn:* | shartn:* | ...'). Uzbek adds suffixes (bola-lar-iga), so each word is
+    cut to a short stem; AND of 15 words would almost never match."""
+    words = []
+    for w in re.findall(r"\w+", text.lower().replace("'", "")):
+        if w in _STOP or (len(w) < 3 and not w.isdigit()):
+            continue
+        words.append(w if w.isdigit() or len(w) <= 4 else w[:max(4, min(len(w) - 2, 6))] + ":*")
+    return " | ".join(dict.fromkeys(words))
 
 
 # ---------- users / history / limits ----------
 
 async def ensure_user(user_id: int) -> asyncpg.Record:
-    return await (await pool()).fetchrow(
+    return await _run("fetchrow",
         "INSERT INTO users (id) VALUES ($1) ON CONFLICT (id) DO UPDATE SET id=EXCLUDED.id RETURNING *", user_id
     )
 
 
 async def add_message(user_id: int, role: str, content: str) -> None:
-    await (await pool()).execute(
+    await _run("execute",
         "INSERT INTO messages (user_id, role, content) VALUES ($1,$2,$3)", user_id, role, content
     )
 
 
 async def history(user_id: int, limit: int = 10) -> list[asyncpg.Record]:
-    rows = await (await pool()).fetch(
+    rows = await _run("fetch",
         "SELECT role, content FROM messages WHERE user_id=$1 ORDER BY id DESC LIMIT $2", user_id, limit
     )
     return list(reversed(rows))
 
 
 async def clear_history(user_id: int) -> None:
-    await (await pool()).execute("DELETE FROM messages WHERE user_id=$1", user_id)
+    await _run("execute", "DELETE FROM messages WHERE user_id=$1", user_id)
 
 
 async def take_daily_quota(user_id: int, limit: int) -> bool:
     """Counts one request; False when today's free limit is used up (Tashkent day)."""
-    count = await (await pool()).fetchval(
+    count = await _run("fetchval",
         """INSERT INTO usage (user_id, day, count) VALUES ($1, (now() AT TIME ZONE 'Asia/Tashkent')::date, 1)
            ON CONFLICT (user_id, day) DO UPDATE SET count = usage.count + 1 RETURNING count""",
         user_id,
@@ -172,11 +226,11 @@ async def take_daily_quota(user_id: int, limit: int) -> bool:
 
 
 async def set_pending_doc(user_id: int, description: str | None) -> None:
-    await (await pool()).execute("UPDATE users SET pending_doc=$2 WHERE id=$1", user_id, description)
+    await _run("execute", "UPDATE users SET pending_doc=$2 WHERE id=$1", user_id, description)
 
 
 async def spend_credit(user_id: int) -> bool:
-    row = await (await pool()).fetchval(
+    row = await _run("fetchval",
         "UPDATE users SET credits=credits-1 WHERE id=$1 AND credits>0 RETURNING credits", user_id
     )
     return row is not None
@@ -184,7 +238,7 @@ async def spend_credit(user_id: int) -> bool:
 
 async def add_credits(user_id: int, n: int) -> int:
     await ensure_user(user_id)
-    return await (await pool()).fetchval(
+    return await _run("fetchval",
         "UPDATE users SET credits=GREATEST(credits+$2, 0) WHERE id=$1 RETURNING credits", user_id, n
     )
 
@@ -192,7 +246,7 @@ async def add_credits(user_id: int, n: int) -> int:
 # ---------- payments ----------
 
 async def receipt_seen(txn_id: str | None, image_hash: str) -> bool:
-    return bool(await (await pool()).fetchval(
+    return bool(await _run("fetchval",
         "SELECT 1 FROM payments WHERE image_hash=$1 OR ($2::text IS NOT NULL AND txn_id=$2)", image_hash, txn_id
     ))
 
@@ -203,7 +257,7 @@ async def record_payment(user_id: int, amount: int | None, credits: int, txn_id:
     Only approved receipts reserve txn_id/image_hash, so a wrongly rejected receipt can be resent."""
     approved = status == "approved"
     try:
-        return await (await pool()).fetchval(
+        return await _run("fetchval",
             """INSERT INTO payments (user_id, amount, credits, txn_id, image_hash, status, details)
                VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb) RETURNING id""",
             user_id, amount, credits, txn_id if approved else None, image_hash if approved else None, status, details,
@@ -227,10 +281,11 @@ async def revoke_payment(payment_id: int) -> asyncpg.Record | None:
 
 
 async def stats() -> asyncpg.Record:
-    return await (await pool()).fetchrow(
+    return await _run("fetchrow",
         """SELECT (SELECT count(*) FROM users) AS users,
                   (SELECT count(*) FROM laws) AS laws,
                   (SELECT count(*) FROM chunks) AS chunks,
+                  (SELECT count(*) FROM chunks WHERE embedding IS NOT NULL) AS embedded,
                   (SELECT count(*) FROM payments WHERE status='approved') AS paid,
                   (SELECT coalesce(sum(amount),0) FROM payments WHERE status='approved') AS revenue"""
     )
