@@ -48,8 +48,12 @@ async def main(argv: list[str]) -> int:
         for doc_id in ids:
             try:
                 log.info("%s %s", doc_id, await ingest_one(session, doc_id, force))
-            except Exception:
+            except Exception as exc:
                 failed += 1
+                if "PerDay" in str(exc):
+                    # Free tier: ~1000 embeddings/day. The daily workflow continues tomorrow.
+                    log.warning("daily embedding quota used up; stopping, remaining docs load on the next run")
+                    break
                 log.exception("%s failed", doc_id)
             await asyncio.sleep(3)  # be polite to lex.uz
     log.info("done: %d ok, %d failed", len(ids) - failed, failed)

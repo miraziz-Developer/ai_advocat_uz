@@ -66,7 +66,7 @@ Testlar:
    manziliga har 10 daqiqada ping qo'ying. Bitta servis 24/7 ishlashi bepul 750 soat/oy limitiga sig'adi.
 
 ## Qonunlarni yangilab turish
-`.github/workflows/update-laws.yml` har dushanba lex.uz'ni tekshiradi va o'zgargan qonunlarni qayta yuklaydi.
+`.github/workflows/update-laws.yml` har kuni lex.uz.ni tekshiradi va o'zgargan qonunlarni qayta yuklaydi.
 GitHub repo → Settings → Secrets → `DATABASE_URL`, `GEMINI_API_KEY` qo'shing.
 
 Yangi qonun qo'shish uchun uni lex.uz'da **o'zbekcha** oching, URL'dagi raqamni `data/sources.txt` fayliga
@@ -86,3 +86,6 @@ qo'shing va `python -m app.ingest` buyrug'ini ishga tushiring. Ruscha versiyanin
   Butun hujjatni bir martada tahlil qilish uchun PDF qilib yuborish yaxshiroq.
 * Bazada hozircha 15 ta asosiy kodeks bor (Konstitutsiya, Fuqarolik, Mehnat, Jinoyat, MJtK, Oila, Uy-joy,
   Soliq, protsessual kodekslar, Yer, Bojxona). Alohida qonunlar `data/sources.txt` orqali qo'shiladi.
+* Bepul Gemini tarifida embedding kuniga taxminan 1000 ta so'rov bilan cheklangan. Barcha kodekslarni boshlang'ich
+  yuklash shu sababli taxminan bir hafta davom etadi, buni kunlik GitHub Actions o'zi bajaradi. Limit tugaganda
+  bot kalit so'z bo'yicha qidiruvga o'tadi va ishlashda davom etadi. Billing yoqilsa, hammasi 10 daqiqada yuklanadi.

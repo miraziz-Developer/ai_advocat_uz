@@ -107,12 +107,13 @@ async def replace_law(doc_id: int, title: str, url: str, content_hash: str, rows
         )
 
 
-async def search(query_embedding: list[float], query_text: str, limit: int = 8) -> list[asyncpg.Record]:
-    """Hybrid search: vector similarity + keyword match, merged with reciprocal rank fusion."""
+async def search(query_embedding: list[float] | None, query_text: str, limit: int = 8) -> list[asyncpg.Record]:
+    """Hybrid search: vector similarity + keyword match, merged with reciprocal rank fusion.
+    query_embedding=None -> keyword-only (embedding quota exhausted)."""
     sql = """
     WITH v AS (
         SELECT id, row_number() OVER (ORDER BY embedding <=> $1::vector) AS r
-        FROM chunks ORDER BY embedding <=> $1::vector LIMIT 30
+        FROM chunks WHERE $1::vector IS NOT NULL ORDER BY embedding <=> $1::vector LIMIT 30
     ), k AS (
         SELECT id, row_number() OVER (ORDER BY ts_rank(tsv, q) DESC) AS r
         FROM chunks, to_tsquery('simple', $2) q
@@ -125,7 +126,8 @@ async def search(query_embedding: list[float], query_text: str, limit: int = 8) 
     FROM fused f JOIN chunks c ON c.id = f.id JOIN laws l ON l.doc_id = c.doc_id
     ORDER BY f.score DESC
     """
-    return await (await pool()).fetch(sql, vec(query_embedding), or_query(query_text), limit)
+    embedding = vec(query_embedding) if query_embedding else None
+    return await (await pool()).fetch(sql, embedding, or_query(query_text), limit)
 
 
 def or_query(text: str) -> str:

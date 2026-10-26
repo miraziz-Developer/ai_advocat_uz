@@ -37,7 +37,8 @@ def _batches(texts: list[str], max_items: int = 100, max_chars: int = 40_000) ->
     return [b for b in batches if b]
 
 
-async def embed(texts: list[str], task: str = "RETRIEVAL_DOCUMENT") -> list[list[float]]:
+async def embed(texts: list[str], task: str = "RETRIEVAL_DOCUMENT", wait: bool = True) -> list[list[float]]:
+    """wait=False fails fast on rate limits (user queries); ingest waits for the per-minute quota to reset."""
     out: list[list[float]] = []
     for batch in _batches(texts):
         for attempt in range(6):
@@ -49,7 +50,7 @@ async def embed(texts: list[str], task: str = "RETRIEVAL_DOCUMENT") -> list[list
                 )
                 break
             except errors.APIError as exc:
-                if exc.code not in (429, 500, 503) or attempt == 5:
+                if not wait or exc.code not in (429, 500, 503) or attempt == 5 or "PerDay" in str(exc):
                     raise
                 log.warning("embedding rate-limited (%s), waiting", exc.code)
                 await asyncio.sleep(20 * (attempt + 1))  # per-minute quotas reset within a minute

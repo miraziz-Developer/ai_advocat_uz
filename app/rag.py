@@ -1,5 +1,6 @@
 """Retrieval-augmented answers: every legal claim must come from lex.uz text stored in the DB."""
 import datetime as dt
+import logging
 import re
 from dataclasses import dataclass
 
@@ -58,6 +59,7 @@ EXTRACT_SCHEMA = {
     "required": ["doc_type", "text", "search_query"],
 }
 
+log = logging.getLogger(__name__)
 _OFFER = re.compile(r"\[\[\s*HUJJAT\s*:\s*(.+?)\]\]", re.S)
 _CITE = re.compile(r"\[(\d{1,2})\]")
 
@@ -92,7 +94,12 @@ async def search_query(user_id: int, text: str) -> str:
 
 
 async def retrieve(query: str) -> list:
-    [vector] = await llm.embed([query], task="RETRIEVAL_QUERY")
+    try:
+        [vector] = await llm.embed([query], task="RETRIEVAL_QUERY", wait=False)
+    except Exception:
+        # Free-tier embedding quota (daily) exhausted: keyword search still finds the right articles.
+        log.warning("query embedding failed, using keyword search only", exc_info=True)
+        vector = None
     return await db.search(vector, query)
 
 

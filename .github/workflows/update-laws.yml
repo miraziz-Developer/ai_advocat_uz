@@ -1,8 +1,9 @@
-# Weekly refresh of laws from lex.uz (free on GitHub Actions). Unchanged laws are skipped.
+# Daily refresh of laws from lex.uz (free on GitHub Actions). Unchanged laws are skipped, so after the
+# initial load (free Gemini tier: ~1000 embeddings/day, i.e. about a week) a run only fetches pages.
 name: update-laws
 on:
   schedule:
-    - cron: "0 22 * * 0"   # Monday 03:00 Tashkent
+    - cron: "30 7 * * *"   # 12:30 Tashkent, right after the Gemini daily quota resets (midnight Pacific)
   workflow_dispatch:
 jobs:
   ingest:
