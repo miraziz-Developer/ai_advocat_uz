@@ -1,5 +1,6 @@
 """Telegram handlers: menu, legal chat, document analysis, paid document drafting, receipt payments."""
 import hashlib
+import html
 import io
 import json
 import logging
@@ -86,10 +87,12 @@ def split_text(text: str, size: int = 4000) -> list[str]:
     return parts
 
 
-async def send_long(message: Message, text: str, **kwargs) -> None:
+async def send_long(message: Message, text: str, parse_mode: str | None = None, **kwargs) -> None:
+    """kwargs (keyboards) go on the last part only. HTML tags never span lines, so line splits keep them valid."""
     parts = split_text(text)
     for i, part in enumerate(parts):
-        await message.answer(part, disable_web_page_preview=True, **(kwargs if i == len(parts) - 1 else {}))
+        await message.answer(part, disable_web_page_preview=True, parse_mode=parse_mode,
+                             **(kwargs if i == len(parts) - 1 else {}))
 
 
 async def ai_error(message: Message, exc: Exception) -> None:
@@ -110,11 +113,11 @@ async def quota_ok(message: Message) -> bool:
 async def reply_with_offer(message: Message, reply: rag.Reply) -> None:
     if reply.offer:
         await db.set_pending_doc(message.from_user.id, reply.offer)
-        await send_long(message, reply.text + f"\n\n💡 Sizga «{reply.offer}» kerak bo'ladi. "
-                                              "Uni tayyor holda (Word fayl) yozib berishim mumkin:",
-                        reply_markup=offer_kb())
+        await send_long(message, reply.text + f"\n\n📝 <b>Kerakli hujjat:</b> {html.escape(reply.offer)}\n"
+                                              "Tayyor Word faylini yozib beraman 👇",
+                        parse_mode="HTML", reply_markup=offer_kb())
     else:
-        await send_long(message, reply.text)
+        await send_long(message, reply.text, parse_mode="HTML")
 
 
 # ---------------- menu ----------------

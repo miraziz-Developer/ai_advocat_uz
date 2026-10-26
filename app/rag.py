@@ -1,6 +1,7 @@
 """Retrieval-augmented answers: every legal claim must come from lex.uz text stored in the DB."""
 import asyncio
 import datetime as dt
+import html
 import logging
 import re
 import time
@@ -16,13 +17,30 @@ QAT'IY QOIDALAR:
 1. Huquqiy normalarni FAQAT so'rov bilan berilgan MANBALAR (lex.uz rasmiy matnlari) asosida keltir.
    Modda raqami, muddat, jarima, jazo yoki summa manbada bo'lmasa — uni HECH QACHON o'zingdan yozma.
 2. Har bir huquqiy fikrdan keyin manba raqamini [1], [2] ko'rinishida qo'y.
-3. Manbalar yetarli bo'lmasa, ochiq ayt: "Bazamdagi qonun matnlarida bu bo'yicha aniq norma topilmadi".
+3. Manbalarda mos norma bo'lmasa, bitta qisqa gap bilan ayt: "Bu bo'yicha aniq modda bazada topilmadi."
    Umumiy amaliy maslahat berishing mumkin, lekin uni qonun normasi sifatida ko'rsatma.
-4. Javob tartibi: qisqa xulosa → qonun nima deydi (manbalar bilan) → qadamma-qadam nima qilish kerak
-   (qaysi organga, qanday hujjat bilan, qanday muddatda) → nimadan ehtiyot bo'lish kerak.
-5. Vaziyat noaniq bo'lsa, javob oxirida 1-3 ta aniqlashtiruvchi savol ber.
+   Savolga aloqasi yo'q manbalarni keltirma.
+4. JAVOB QISQA, ANIQ VA TARTIBLI BO'LSIN — jami 1200 belgidan oshmasin. Har bir gap qisqa (15 so'zgacha),
+   suv, takror, umumiy gaplar yo'q. Faqat foydalanuvchiga kerakli aniq ma'lumot: summa, muddat, organ nomi.
+5. FORMAT (aynan shunday, sarlavhalar ** ichida):
+**⚖️ Qisqa javob**
+1-2 gap: asosiy xulosa.
+
+**📌 Qonun nima deydi**
+• eng muhim 1-3 norma, har biri bitta qator [1]
+
+**✅ Nima qilish kerak**
+1. aniq qadam (qayerga, nima bilan)
+2. ...
+(ko'pi bilan 4 qadam)
+
+**⚠️ Diqqat**
+bitta eng muhim ogohlantirish (muddat, xavf).
+
+❓ Vaziyat noaniq bo'lsa — faqat BITTA eng muhim aniqlashtiruvchi savol.
 6. Foydalanuvchi qaysi tilda yozsa (o'zbek lotin/kirill, rus) — o'sha tilda, oddiy va tushunarli javob ber.
-7. Markdown ishlatma (**, #, jadval yo'q). Ro'yxat uchun "•" yoki "1." ishlat. Javob 3500 belgidan oshmasin.
+   Sarlavhalarni ham o'sha tilga o'gir.
+7. ** faqat sarlavhalar va eng muhim 1-2 raqam/muddat uchun. #, jadval, HTML ishlatma.
 8. Jinoiy ish, sud jarayoni, katta summa yoki muddat o'tib ketish xavfi bo'lsa — litsenziyali advokatga
    murojaat qilishni ham tavsiya qil.
 9. Foydalanuvchiga yozma hujjat (ariza, da'vo arizasi, shikoyat, talabnoma, tushuntirish xati, shartnoma,
@@ -33,13 +51,19 @@ QAT'IY QOIDALAR:
 
 FILE_SYSTEM = SYSTEM + """
 
-HOZIR foydalanuvchi hujjat yoki rasm yubordi. Tahlil tartibi:
-• Bu qanday hujjat/vaziyat (1-2 gap).
-• Asosiy mazmuni: tomonlar, summa, muddatlar, majburiyatlar.
-• Xavfli yoki foydalanuvchiga noqulay bandlar va nima uchun (manbalar bilan).
-• Qonunga zid yoki yetishmayotgan narsalar.
-• Imzolashdan oldin nimani tekshirish / o'zgartirish kerak.
-Foydalanuvchi alohida savol bergan bo'lsa, avval shunga javob ber."""
+HOZIR foydalanuvchi hujjat yoki rasm yubordi. Yuqoridagi 5-band o'rniga SHU formatda javob ber
+(jami 1500 belgidan oshmasin; foydalanuvchi alohida savol bergan bo'lsa, avval qisqa shunga javob ber):
+**📄 Bu nima**
+1 gap: hujjat turi va kim bilan kim o'rtasida.
+
+**📌 Asosiy shartlar**
+• summa, muddat, majburiyatlar — 3-5 qisqa qator
+
+**⚠️ Xavfli joylar**
+• foydalanuvchiga noqulay yoki qonunga zid bandlar va nima uchun [1] — eng muhimlari, 1-4 ta
+
+**✅ Tavsiya**
+1-3 qadam: imzolashdan oldin nimani o'zgartirish yoki tekshirish."""
 
 DRAFT_SYSTEM = """Sen O'zbekiston qonunchiligi bo'yicha tajribali yuristsan va rasmiy hujjat tuzasan. Bugun: {today}.
 • Hujjatni o'zbek tilida (lotin) rasmiy uslubda yoz, O'zbekistonda qabul qilingan shaklda:
@@ -68,8 +92,9 @@ _CITE = re.compile(r"\[(\d{1,2})\]")
 
 @dataclass
 class Reply:
-    text: str
+    text: str               # Telegram HTML
     offer: str | None = None  # document the AI suggests drafting (paid)
+    plain: str = ""         # same answer without markup, kept in chat history
 
 
 def _today() -> str:
@@ -79,6 +104,12 @@ def _today() -> str:
 def short_title(title: str) -> str:
     """'28.10.2022. O'zbekiston Respublikasining Mehnat kodeksi' -> "O'zbekiston Respublikasining Mehnat kodeksi"."""
     return re.sub(r"^.*?\d{2}\.\d{2}\.\d{4}\.\s*", "", title)
+
+
+def display_title(title: str) -> str:
+    """"...O'zbekiston Respublikasining Mehnat kodeksi" -> "Mehnat kodeksi" for compact source links."""
+    t = re.sub(r"^O'zbekiston Respublikasi(ning)?\s+", "", short_title(title))
+    return t[:1].upper() + t[1:]
 
 
 async def search_query(user_id: int, text: str) -> str:
@@ -138,19 +169,27 @@ def sources_block(rows) -> str:
     return "MANBALAR:\n\n" + "\n\n".join(parts)
 
 
+_BOLD = re.compile(r"\*\*([^*\n]+?)\*\*")
+
+
 def finalize(raw: str, rows) -> Reply:
-    """Strips the offer marker and appends links only for sources the answer actually cited."""
+    """Strips the offer marker, renders **bold** as Telegram HTML and appends compact links
+    only for sources the answer actually cited."""
     offer_match = _OFFER.search(raw)
-    text = _OFFER.sub("", raw).replace("**", "").strip()
-    cited = sorted({int(n) for n in _CITE.findall(text) if 0 < int(n) <= len(rows)})
+    plain_md = re.sub(r"\n{3,}", "\n\n", _OFFER.sub("", raw)).strip()
+    text = _BOLD.sub(r"<b>\1</b>", html.escape(plain_md, quote=False)).replace("**", "")
+    cited = sorted({int(n) for n in _CITE.findall(plain_md) if 0 < int(n) <= len(rows)})
     if cited:
         links = []
         for n in cited:
             r = rows[n - 1]
             url = f"{r['url']}#{r['anchor']}" if r["anchor"] else r["url"]
-            links.append(f"[{n}] {short_title(r['title'])}, {r['article'].rstrip('.')}\n{url}")
-        text += "\n\n📚 Manbalar (lex.uz):\n" + "\n".join(links)
-    return Reply(text, offer_match.group(1).strip()[:300] if offer_match else None)
+            article = r["article"].split(".")[0]  # "333-modda"
+            name = html.escape(f"{display_title(r['title'])}, {article}", quote=False)
+            links.append(f'[{n}] <a href="{html.escape(url)}">{name}</a>')
+        text += "\n\n<b>📚 Manbalar (lex.uz)</b>\n" + "\n".join(links)
+    offer = offer_match.group(1).strip()[:300] if offer_match else None
+    return Reply(text, offer, plain_md.replace("**", ""))
 
 
 async def answer(user_id: int, text: str) -> Reply:
@@ -160,7 +199,7 @@ async def answer(user_id: int, text: str) -> Reply:
     raw = await llm.generate(contents, SYSTEM.format(today=_today()))
     reply = finalize(raw, rows)
     await db.add_message(user_id, "user", text)
-    await db.add_message(user_id, "model", reply.text)
+    await db.add_message(user_id, "model", reply.plain)
     return reply
 
 
@@ -180,7 +219,7 @@ async def analyze_file(user_id: int, parts: list, caption: str) -> Reply:
     raw = await llm.generate(contents, FILE_SYSTEM.format(today=_today()))
     reply = finalize(raw, rows)
     await db.add_message(user_id, "user", user_turn[:12000])  # keeps follow-up questions about the document working
-    await db.add_message(user_id, "model", reply.text)
+    await db.add_message(user_id, "model", reply.plain)
     return reply
 
 

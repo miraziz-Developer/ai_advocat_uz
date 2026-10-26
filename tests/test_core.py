@@ -57,16 +57,19 @@ def test_or_query():
 
 
 def _row(n):
-    return {"title": "28.10.2022. Mehnat kodeksi", "article": f"{n}-modda.", "anchor": 100 + n,
+    return {"title": "28.10.2022. O'zbekiston Respublikasining Mehnat kodeksi", "article": f"{n}-modda.", "anchor": 100 + n,
             "url": "https://lex.uz/uz/docs/6257288", "body": "..."}
 
 
 def test_finalize_cites_only_used_sources_and_extracts_offer():
-    reply = rag.finalize("**Javob** [2] va [9].\n[[HUJJAT: ish beruvchiga talabnoma]]", [_row(1), _row(2)])
+    raw = "**⚖️ Qisqa javob**\nIsh haqi <kechikdi> [2] va [9].\n[[HUJJAT: ish beruvchiga talabnoma]]"
+    reply = rag.finalize(raw, [_row(1), _row(2)])
     assert reply.offer == "ish beruvchiga talabnoma"
-    assert "**" not in reply.text and "[[" not in reply.text
-    assert "https://lex.uz/uz/docs/6257288#102" in reply.text
-    assert "#101" not in reply.text
+    assert reply.text.startswith("<b>⚖️ Qisqa javob</b>")
+    assert "&lt;kechikdi&gt;" in reply.text  # model text is escaped, never raw HTML
+    assert '<a href="https://lex.uz/uz/docs/6257288#102">Mehnat kodeksi, 2-modda</a>' in reply.text
+    assert "#101" not in reply.text and "[[" not in reply.text
+    assert "**" not in reply.plain and "<b>" not in reply.plain
 
 
 def test_split_text():
