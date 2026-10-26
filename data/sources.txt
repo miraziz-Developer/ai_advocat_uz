@@ -1,0 +1,18 @@
+# lex.uz document ids (Uzbek versions) loaded into the knowledge base.
+# Add a law: open it on lex.uz in Uzbek, copy the number from the URL (lex.uz/uz/docs/<id>),
+# add a line here, run `python -m app.ingest`. Russian versions have different ids — use the Uzbek one.
+6445145  # Konstitutsiya (2023)
+111189   # Fuqarolik kodeksi, 1-qism
+180552   # Fuqarolik kodeksi, 2-qism
+6257288  # Mehnat kodeksi (2022)
+111453   # Jinoyat kodeksi
+97664    # Ma'muriy javobgarlik to'g'risidagi kodeks
+104720   # Oila kodeksi
+106136   # Uy-joy kodeksi
+4674902  # Soliq kodeksi
+3517337  # Fuqarolik protsessual kodeksi
+111460   # Jinoyat-protsessual kodeksi
+3523891  # Iqtisodiy protsessual kodeksi
+3527353  # Ma'muriy sud ishlarini yuritish to'g'risidagi kodeks
+152653   # Yer kodeksi
+2876354  # Bojxona kodeksi
