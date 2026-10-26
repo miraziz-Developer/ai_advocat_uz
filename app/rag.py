@@ -71,7 +71,10 @@ DRAFT_SYSTEM = """Sen O'zbekiston qonunchiligi bo'yicha tajribali yuristsan va r
 • Normalarga faqat berilgan MANBALARdan havola qil (masalan: "Mehnat kodeksining 161-moddasiga asosan").
   Manbada bo'lmagan modda raqamini yozma.
 • Foydalanuvchi bermagan ma'lumotlar uchun to'rtburchak qavsli joy qoldir: [F.I.Sh.], [manzil], [sana].
-• Markdown ishlatma. Birinchi qator — faqat hujjat nomi (masalan: DA'VO ARIZASI)."""
+• Har bir moddani manbada qanday bo'lsa, aynan o'sha raqam bilan bir marta keltir; qavs ichida tuzatish
+  yoki "manbada keltirilgan" kabi izohlar yozma.
+• Markdown ishlatma. Birinchi qator — faqat hujjat nomi (masalan: DA'VO ARIZASI); matn ichida uni takrorlama.
+  Undan keyin: kimga, kimdan, sana, asosiy matn, talab, ilovalar, imzo."""
 
 EXTRACT_SCHEMA = {
     "type": "object",
@@ -232,4 +235,7 @@ async def draft_document(user_id: int, description: str) -> tuple[str, str]:
     raw = await llm.generate(contents, DRAFT_SYSTEM.format(today=_today()), temperature=0.3)
     raw = raw.replace("**", "").strip()
     title, _, body = raw.partition("\n")
-    return title.strip(" #") or "HUJJAT", body.strip()
+    title = title.strip(" #") or "HUJJAT"
+    lines = body.strip().split("\n")
+    body = "\n".join(line for line in lines if line.strip().upper() != title.upper())  # model sometimes repeats the title
+    return title, body.strip()
