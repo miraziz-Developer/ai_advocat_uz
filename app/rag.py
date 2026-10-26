@@ -3,6 +3,7 @@ import asyncio
 import datetime as dt
 import logging
 import re
+import time
 from dataclasses import dataclass
 
 from app import config, db, llm
@@ -98,13 +99,32 @@ async def search_query(user_id: int, text: str) -> str:
     return normalize(q or text)
 
 
+TRANSCRIBE_SYSTEM = """Sen ovozli xabarlarni matnga aylantiruvchisan. Foydalanuvchi o'zbek (yoki rus) tilida,
+ko'pincha shevada gapiradi. Aytilgan gapni AYNAN, ma'nosini o'zgartirmasdan yoz: o'zbekcha bo'lsa lotin
+alifbosida, ruscha bo'lsa rus tilida. Takrorlar va "ee", "mm" kabi tovushlarni tashlab yubor. Hech narsa
+qo'shma, javob berma, izoh yozma. Nutq bo'lmasa yoki tushunib bo'lmasa — bo'sh qator qaytar."""
+
+
+async def transcribe(audio: bytes, mime_type: str) -> str:
+    text = await llm.generate([llm.file_part(audio, mime_type), "Shu ovozli xabarni matnga aylantir."],
+                              TRANSCRIBE_SYSTEM, models=config.LITE_MODELS + config.CHAT_MODELS, timeout=40)
+    return text.strip().strip("«»\"")
+
+
+_embed_paused_until = 0.0
+
+
 async def retrieve(query: str) -> list:
-    try:
-        [vector] = await llm.embed([query], task="RETRIEVAL_QUERY", wait=False)
-    except Exception:
-        # Free-tier embedding quota (daily) exhausted: keyword search still finds the right articles.
-        log.warning("query embedding failed, using keyword search only", exc_info=True)
-        vector = None
+    global _embed_paused_until
+    vector = None
+    if time.monotonic() >= _embed_paused_until:
+        try:
+            [vector] = await llm.embed([query], task="RETRIEVAL_QUERY", wait=False)
+        except Exception as exc:
+            # Free-tier embedding quota exhausted: keyword search still finds the right articles.
+            # Don't retry on every question for a while — each failed call adds latency.
+            _embed_paused_until = time.monotonic() + 1800
+            log.warning("query embedding failed (%s), keyword search only for 30 min", str(exc)[:120])
     return await db.search(vector, query)
 
 

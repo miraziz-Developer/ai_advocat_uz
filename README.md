@@ -8,6 +8,7 @@ modda havola bilan ko'rsatiladi. Bazada mos modda topilmasa, AI buni ochiq aytad
 |---|---|
 | Huquqiy savol-javob, vaziyat tugmalari (Mehnat, Uy-joy, Oila, Jarima, Iste'molchi, Meros) | bepul |
 | Shartnoma yoki hujjatni rasm / PDF / Word orqali tahlil qilish | bepul |
+| Ovozli xabar (o'zbek / rus): matnga aylantirib, savolga javob beradi | bepul |
 | Ariza, shikoyat, da'vo arizasi, talabnoma tayyorlash (Word fayl) | pullik (`DOC_PRICE`) |
 
 AI suhbat davomida hujjat kerakligini o'zi aniqlaydi va "📝 Hujjatni tayyorlab berish" tugmasini taklif qiladi.

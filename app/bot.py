@@ -406,6 +406,38 @@ async def chat(message: Message, bot: Bot) -> None:
     await reply_with_offer(message, reply)
 
 
+MAX_VOICE_SECONDS = 600
+
+
+@router.message(F.voice | F.audio | F.video_note)
+async def voice(message: Message, bot: Bot) -> None:
+    media = message.voice or message.audio or message.video_note
+    if (media.duration or 0) > MAX_VOICE_SECONDS:
+        await message.answer("Ovozli xabar 10 daqiqadan oshmasin. Qisqaroq qilib yuboring.")
+        return
+    if (media.file_size or 0) > MAX_FILE:
+        await message.answer("Fayl juda katta (20 MB dan oshmasin).")
+        return
+    if not await quota_ok(message):
+        return
+    await db.ensure_user(message.from_user.id)
+    await message.answer("🎙 Ovozli xabaringizni tinglayapman...")
+    mime = "video/mp4" if message.video_note else (getattr(media, "mime_type", None) or "audio/ogg")
+    try:
+        async with ChatActionSender.typing(bot=bot, chat_id=message.chat.id):
+            data = (await bot.download(media)).read()
+            text = await rag.transcribe(data, mime)
+            if not text:
+                await message.answer("Ovozni tushuna olmadim 😔 Iltimos, aniqroq gapirib qayta yuboring yoki yozib yuboring.")
+                return
+            await send_long(message, f"🎙 Siz dedingiz:\n«{text}»")
+            reply = await rag.answer(message.from_user.id, text[:4000])
+    except Exception as exc:
+        await ai_error(message, exc)
+        return
+    await reply_with_offer(message, reply)
+
+
 @router.message()
 async def other(message: Message) -> None:
-    await message.answer("Matn, rasm yoki PDF yuboring 🙂", reply_markup=MENU)
+    await message.answer("Matn, ovozli xabar, rasm yoki PDF yuboring 🙂", reply_markup=MENU)
