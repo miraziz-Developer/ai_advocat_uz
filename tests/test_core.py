@@ -101,3 +101,9 @@ def test_receipt_rejections():
     assert not decide(paid_at="")[0]
     assert not decide(tampering_signs="raqamlar shrifti boshqacha")[0]
     assert not decide(currency="USD")[0]
+
+
+def test_display_title():
+    assert rag.display_title("28.10.2022. O'zbekiston Respublikasining Mehnat kodeksi") == "Mehnat kodeksi"
+    assert rag.display_title("221-I-son 26.04.1996. Iste'molchilarning huquqlarini himoya qilish to'g'risida") == \
+        "Iste'molchilarning huquqlarini himoya qilish to'g'risidagi qonun"

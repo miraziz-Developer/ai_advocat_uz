@@ -16,3 +16,12 @@
 3527353  # Ma'muriy sud ishlarini yuritish to'g'risidagi kodeks
 152653   # Yer kodeksi
 2876354  # Bojxona kodeksi
+# Muhim qonunlar
+4704     # Iste'molchilarning huquqlarini himoya qilish to'g'risida
+6764454  # Yo'l harakati to'g'risida (2024)
+3336169  # Jismoniy va yuridik shaxslarning murojaatlari to'g'risida (yangi tahrir)
+4396419  # Shaxsga doir ma'lumotlar to'g'risida
+5055690  # Aholi bandligi to'g'risida
+26477    # Sud hujjatlari va boshqa organlar hujjatlarini ijro etish to'g'risida
+4494709  # Xotin-qizlarni tazyiq va zo'ravonlikdan himoya qilish to'g'risida
+5013007  # Ta'lim to'g'risida

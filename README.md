@@ -85,8 +85,9 @@ qo'shing va `python -m app.ingest` buyrug'ini ishga tushiring. Ruscha versiyanin
   Limit tugasa yoki foydalanuvchilar ko'paysa, AI Studio'da billing yoqing.
 * Ko'p sahifali hujjatni bir nechta rasm qilib (albom) yuborilsa, har bir rasm alohida tahlil qilinadi.
   Butun hujjatni bir martada tahlil qilish uchun PDF qilib yuborish yaxshiroq.
-* Bazada hozircha 15 ta asosiy kodeks bor (Konstitutsiya, Fuqarolik, Mehnat, Jinoyat, MJtK, Oila, Uy-joy,
-  Soliq, protsessual kodekslar, Yer, Bojxona). Alohida qonunlar `data/sources.txt` orqali qo'shiladi.
+* Bazada 15 ta kodeks va 8 ta muhim qonun bor (Konstitutsiya, Fuqarolik, Mehnat, Jinoyat, MJtK, Oila, Uy-joy,
+  Soliq, protsessual kodekslar, Yer, Bojxona; iste'molchi, yo'l harakati, murojaatlar, shaxsiy ma'lumot, bandlik,
+  sud qarorlarini ijro etish, xotin-qizlar himoyasi, ta'lim). Yangilari `data/sources.txt` orqali qo'shiladi.
 * Bepul Gemini tarifida embedding kuniga taxminan 1000 ta so'rov bilan cheklangan. Barcha kodekslarni boshlang'ich
   yuklash shu sababli taxminan bir hafta davom etadi, buni kunlik GitHub Actions o'zi bajaradi. Limit tugaganda
   bot kalit so'z bo'yicha qidiruvga o'tadi va ishlashda davom etadi. Billing yoqilsa, hammasi 10 daqiqada yuklanadi.

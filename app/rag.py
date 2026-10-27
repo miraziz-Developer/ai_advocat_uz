@@ -119,6 +119,8 @@ def short_title(title: str) -> str:
 def display_title(title: str) -> str:
     """"...O'zbekiston Respublikasining Mehnat kodeksi" -> "Mehnat kodeksi" for compact source links."""
     t = re.sub(r"^O'zbekiston Respublikasi(ning)?\s+", "", short_title(title))
+    if t.endswith("to'g'risida"):  # "Iste'molchilarning ... to'g'risida" is a law, not a code
+        t += "gi qonun"
     return t[:1].upper() + t[1:]
 
 
