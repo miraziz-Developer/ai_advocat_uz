@@ -5,6 +5,7 @@ import logging
 
 import aiohttp
 from aiogram import Bot, Dispatcher
+from aiogram.types import BotCommand
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
 
@@ -26,6 +27,26 @@ async def keep_awake(url: str) -> None:
                     pass
 
 
+DESCRIPTION = (
+    "⚖️ O'zbekiston qonunlari bo'yicha AI huquqiy yordamchi.\n\n"
+    "• Vaziyatingizni yozing yoki 🎙 ovozli xabar yuboring — qonun bo'yicha nima qilishni moddalar bilan aytaman.\n"
+    "• 📄 Shartnoma rasmini yoki PDF yuboring — xavfli joylarini topaman.\n"
+    "• 📝 Ariza, shikoyat, da'vo arizasini tayyorlab beraman.\n\n"
+    "Manba: lex.uz rasmiy qonun matnlari."
+)
+
+
+async def setup_profile(bot: Bot) -> None:
+    """Menu commands and the text users see before pressing Start. Failures here must not stop the bot."""
+    try:
+        await bot.set_my_commands([BotCommand(command="start", description="Bosh menyu"),
+                                   BotCommand(command="new", description="Yangi suhbat")])
+        await bot.set_my_description(DESCRIPTION)
+        await bot.set_my_short_description("O'zbekiston qonunlari bo'yicha AI yordamchi: savol, ovoz, shartnoma tahlili.")
+    except Exception:
+        log.exception("could not set bot profile")
+
+
 async def health(_: web.Request) -> web.Response:
     return web.Response(text="ok")
 
@@ -40,6 +61,7 @@ def main() -> None:
     if not config.WEBHOOK_BASE_URL:
         async def polling() -> None:
             await db.init()
+            await setup_profile(bot)
             await bot.delete_webhook(drop_pending_updates=False)
             await dp.start_polling(bot)
         asyncio.run(polling())
@@ -51,6 +73,7 @@ def main() -> None:
 
     async def on_startup(bot: Bot) -> None:
         await db.init()
+        await setup_profile(bot)
         await bot.set_webhook(f"{base}{WEBHOOK_PATH}", secret_token=config.WEBHOOK_SECRET,
                               allowed_updates=dp.resolve_used_update_types())
         tasks.append(asyncio.create_task(keep_awake(base)))

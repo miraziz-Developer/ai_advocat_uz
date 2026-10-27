@@ -7,7 +7,7 @@ modda havola bilan ko'rsatiladi. Bazada mos modda topilmasa, AI buni ochiq aytad
 | Funksiya | Narx |
 |---|---|
 | Huquqiy savol-javob, vaziyat tugmalari (Mehnat, Uy-joy, Oila, Jarima, Iste'molchi, Meros) | bepul |
-| Shartnoma yoki hujjatni rasm / PDF / Word orqali tahlil qilish | bepul |
+| Shartnoma yoki hujjatni rasm / albom (10 sahifagacha) / PDF / Word orqali tahlil qilish | bepul |
 | Ovozli xabar (o'zbek / rus): matnga aylantirib, savolga javob beradi | bepul |
 | Ariza, shikoyat, da'vo arizasi, talabnoma tayyorlash (Word fayl) | pullik (`DOC_PRICE`) |
 
@@ -76,6 +76,8 @@ qo'shing va `python -m app.ingest` buyrug'ini ishga tushiring. Ruscha versiyanin
 ## Admin buyruqlari
 * `/stats`: foydalanuvchilar, bazadagi qonunlar va to'lovlar soni.
 * `/credit <user_id> <soni>`: kredit qo'shish yoki ayirish (manfiy son bilan ayiriladi).
+* `/bad`: foydalanuvchilar 👎 bergan oxirgi javoblar (savol va javob bilan).
+* Botda xato bo'lsa yoki 👎 bosilsa, adminga avtomatik xabar keladi (10 daqiqada ko'pi bilan 1 ta).
 
 ## Bilish kerak bo'lgan cheklovlar
 * **Chekni AI 100% tasdiqlay olmaydi.** Yaxshi tahrirlangan soxta skrinshot o'tib ketishi mumkin. Shuning uchun
@@ -83,8 +85,6 @@ qo'shing va `python -m app.ingest` buyrug'ini ishga tushiring. Ruscha versiyanin
   Daromad o'sganda Click/Payme merchant API'ga o'tish kerak: unda to'lovni server o'zi tasdiqlaydi.
 * Bepul Gemini tarifida yuborilgan ma'lumotlar Google tomonidan modelni yaxshilash uchun ishlatilishi mumkin.
   Limit tugasa yoki foydalanuvchilar ko'paysa, AI Studio'da billing yoqing.
-* Ko'p sahifali hujjatni bir nechta rasm qilib (albom) yuborilsa, har bir rasm alohida tahlil qilinadi.
-  Butun hujjatni bir martada tahlil qilish uchun PDF qilib yuborish yaxshiroq.
 * Bazada 15 ta kodeks va 8 ta muhim qonun bor (Konstitutsiya, Fuqarolik, Mehnat, Jinoyat, MJtK, Oila, Uy-joy,
   Soliq, protsessual kodekslar, Yer, Bojxona; iste'molchi, yo'l harakati, murojaatlar, shaxsiy ma'lumot, bandlik,
   sud qarorlarini ijro etish, xotin-qizlar himoyasi, ta'lim). Yangilari `data/sources.txt` orqali qo'shiladi.

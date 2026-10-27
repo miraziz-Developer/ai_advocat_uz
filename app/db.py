@@ -57,6 +57,15 @@ CREATE TABLE IF NOT EXISTS usage (
     PRIMARY KEY (user_id, day)
 );
 
+CREATE TABLE IF NOT EXISTS feedback (
+    id         BIGSERIAL PRIMARY KEY,
+    user_id    BIGINT NOT NULL,
+    good       BOOLEAN NOT NULL,
+    question   TEXT,
+    answer     TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS payments (
     id         BIGSERIAL PRIMARY KEY,
     user_id    BIGINT NOT NULL,
@@ -287,5 +296,21 @@ async def stats() -> asyncpg.Record:
                   (SELECT count(*) FROM chunks) AS chunks,
                   (SELECT count(*) FROM chunks WHERE embedding IS NOT NULL) AS embedded,
                   (SELECT count(*) FROM payments WHERE status='approved') AS paid,
+                  (SELECT count(*) FROM feedback WHERE good) AS good,
+                  (SELECT count(*) FROM feedback WHERE NOT good) AS bad,
                   (SELECT coalesce(sum(amount),0) FROM payments WHERE status='approved') AS revenue"""
     )
+
+
+async def save_feedback(user_id: int, good: bool) -> None:
+    """Stores the rating with the user's latest question/answer pair, so bad answers can be reviewed."""
+    await _run("execute", """
+        INSERT INTO feedback (user_id, good, question, answer)
+        SELECT $1, $2,
+               (SELECT content FROM messages WHERE user_id=$1 AND role='user' ORDER BY id DESC LIMIT 1),
+               (SELECT content FROM messages WHERE user_id=$1 AND role='model' ORDER BY id DESC LIMIT 1)""",
+        user_id, good)
+
+
+async def recent_bad_feedback(limit: int) -> list[asyncpg.Record]:
+    return await _run("fetch", "SELECT question, answer FROM feedback WHERE NOT good ORDER BY id DESC LIMIT $1", limit)

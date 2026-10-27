@@ -1,7 +1,9 @@
 """Telegram handlers: menu, legal chat, document analysis, paid document drafting, receipt payments."""
+import asyncio
 import hashlib
-import os
 import html
+import os
+import time
 import io
 import json
 import logging
@@ -64,9 +66,13 @@ def _price() -> str:
     return f"{config.DOC_PRICE:,}".replace(",", " ")
 
 
-def offer_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
-        text=f"📝 Hujjatni tayyorlab berish — {_price()} so'm", callback_data="draft")]])
+FEEDBACK_ROW = [InlineKeyboardButton(text="👍 Foydali", callback_data="fb:1"),
+                InlineKeyboardButton(text="👎 Foydasiz", callback_data="fb:0")]
+
+
+def offer_kb(feedback: bool = False) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(text=f"📝 Hujjatni tayyorlab berish — {_price()} so'm", callback_data="draft")]]
+    return InlineKeyboardMarkup(inline_keyboard=rows + ([FEEDBACK_ROW] if feedback else []))
 
 
 def split_text(text: str, size: int = 4000) -> list[str]:
@@ -102,6 +108,23 @@ async def ai_error(message: Message, exc: Exception) -> None:
     else:
         log.exception("AI request failed")
         await message.answer("❌ Xatolik yuz berdi. Birozdan keyin qayta urinib ko'ring.")
+    await alert_admins(message.bot, f"⚠️ Xato: {type(exc).__name__}: {str(exc)[:300]}")
+
+
+_last_alert = 0.0
+
+
+async def alert_admins(bot: Bot, text: str) -> None:
+    """At most one alert per 10 minutes, so a Gemini outage doesn't flood the admin chat."""
+    global _last_alert
+    if time.monotonic() - _last_alert < 600:
+        return
+    _last_alert = time.monotonic()
+    for admin in config.ADMIN_IDS:
+        try:
+            await bot.send_message(admin, text)
+        except Exception:
+            log.exception("could not alert admin %s", admin)
 
 
 async def quota_ok(message: Message) -> bool:
@@ -116,9 +139,10 @@ async def reply_with_offer(message: Message, reply: rag.Reply) -> None:
         await db.set_pending_doc(message.from_user.id, reply.offer)
         await send_long(message, reply.text + f"\n\n📝 <b>Kerakli hujjat:</b> {html.escape(reply.offer)}\n"
                                               "Tayyor Word faylini yozib beraman 👇",
-                        parse_mode="HTML", reply_markup=offer_kb())
+                        parse_mode="HTML", reply_markup=offer_kb(feedback=True))
     else:
-        await send_long(message, reply.text, parse_mode="HTML")
+        await send_long(message, reply.text, parse_mode="HTML",
+                        reply_markup=InlineKeyboardMarkup(inline_keyboard=[FEEDBACK_ROW]))
 
 
 # ---------------- menu ----------------
@@ -339,6 +363,19 @@ async def revoke(cb: CallbackQuery, bot: Bot) -> None:
                                            "Xato bo'lsa, admin bilan bog'laning.")
 
 
+@router.callback_query(F.data.startswith("fb:"))
+async def feedback(cb: CallbackQuery) -> None:
+    good = cb.data == "fb:1"
+    await db.save_feedback(cb.from_user.id, good)
+    await cb.answer("Rahmat! 🙏" if good else "Rahmat, javoblarni yaxshilaymiz 🙏")
+    # keep the paid-document button, drop the feedback row so it can't be clicked twice
+    rows = [r for r in (cb.message.reply_markup.inline_keyboard if cb.message.reply_markup else [])
+            if not r[0].callback_data.startswith("fb:")]
+    await cb.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=rows) if rows else None)
+    if not good:
+        await alert_admins(cb.bot, f"👎 Foydasiz javob (user {cb.from_user.id}). /bad bilan ko'ring.")
+
+
 # ---------------- admin ----------------
 
 @router.message(Command("stats"), F.from_user.id.in_(config.ADMIN_IDS))
@@ -347,7 +384,18 @@ async def stats(message: Message) -> None:
     await message.answer(f"👥 Foydalanuvchilar: {s['users']}\n📚 Qonunlar: {s['laws']} ({s['chunks']} bo'lak, "
                          f"{s['embedded']} tasi ma'no-qidiruvga tayyor)\n"
                          f"💰 To'lovlar: {s['paid']} ta, {s['revenue']:,} so'm\n".replace(",", " ")
+                         + f"👍 {s['good']}  👎 {s['bad']}\n"
                          + f"🔖 Versiya: {os.environ.get('RENDER_GIT_COMMIT', 'local')[:7]}")
+
+
+@router.message(Command("bad"), F.from_user.id.in_(config.ADMIN_IDS))
+async def bad_answers(message: Message) -> None:
+    rows = await db.recent_bad_feedback(5)
+    if not rows:
+        await message.answer("👎 baholangan javoblar yo'q 🎉")
+        return
+    for r in rows:
+        await send_long(message, f"❓ {r['question'][:1500]}\n\n🤖 {r['answer'][:2000]}")
 
 
 @router.message(Command("credit"), F.from_user.id.in_(config.ADMIN_IDS))
@@ -362,31 +410,52 @@ async def credit(message: Message, command: CommandObject) -> None:
 
 # ---------------- AI chat & files ----------------
 
+MAX_PAGES = 10
+_albums: dict[str, list[Message]] = {}
+
+
 @router.message(F.photo | F.document)
 async def file_message(message: Message, bot: Bot) -> None:
-    if message.photo:
-        file, mime = message.photo[-1], "image/jpeg"
+    if message.media_group_id:
+        # Telegram delivers album pages as separate updates within ~1s; analyze them together as one document.
+        group = _albums.setdefault(message.media_group_id, [])
+        group.append(message)
+        if len(group) > 1:
+            return
+        await asyncio.sleep(2.5)
+        messages = sorted(_albums.pop(message.media_group_id), key=lambda m: m.message_id)[:MAX_PAGES]
     else:
-        file, mime = message.document, message.document.mime_type or ""
-        if mime not in FILE_MIMES:
+        messages = [message]
+
+    files = []
+    for m in messages:
+        if m.photo:
+            files.append((m.photo[-1], "image/jpeg"))
+        elif (m.document.mime_type or "") in FILE_MIMES:
+            files.append((m.document, m.document.mime_type))
+        else:
             await message.answer("Bu fayl turini o'qiy olmayman. Rasm, PDF yoki Word (.docx) yuboring.")
             return
-    if (file.file_size or 0) > MAX_FILE:
-        await message.answer("Fayl juda katta (20 MB dan oshmasin). Muhim sahifalarni rasm qilib yuboring.")
-        return
+        if (files[-1][0].file_size or 0) > MAX_FILE:
+            await message.answer("Fayl juda katta (20 MB dan oshmasin). Muhim sahifalarni rasm qilib yuboring.")
+            return
     if not await quota_ok(message):
         return
     await db.ensure_user(message.from_user.id)
-    await message.answer("📄 Hujjatni o'qiyapman, biroz kuting...")
+    pages = f" ({len(files)} sahifa)" if len(files) > 1 else ""
+    await message.answer(f"📄 Hujjatni o'qiyapman{pages}, biroz kuting...")
+    caption = next((m.caption for m in messages if m.caption), "")
     try:
         async with ChatActionSender.typing(bot=bot, chat_id=message.chat.id):
-            data = (await bot.download(file)).read()
-            if mime == DOCX_MIME:
-                text = "\n".join(p.text for p in Docx(io.BytesIO(data)).paragraphs)
-                parts = [llm.types.Part(text=text[:60000])]
-            else:
-                parts = [llm.file_part(data, mime)]
-            reply = await rag.analyze_file(message.from_user.id, parts, message.caption or "")
+            parts = []
+            for file, mime in files:
+                data = (await bot.download(file)).read()
+                if mime == DOCX_MIME:
+                    text = "\n".join(p.text for p in Docx(io.BytesIO(data)).paragraphs)
+                    parts.append(llm.types.Part(text=text[:60000]))
+                else:
+                    parts.append(llm.file_part(data, mime))
+            reply = await rag.analyze_file(message.from_user.id, parts, caption)
     except Exception as exc:
         await ai_error(message, exc)
         return

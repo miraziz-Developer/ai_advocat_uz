@@ -1,4 +1,5 @@
 """Drives the real aiogram dispatcher with fake Telegram updates; Telegram, DB and Gemini are stubbed."""
+import asyncio
 import datetime as dt
 import io
 from types import SimpleNamespace
@@ -6,8 +7,9 @@ from types import SimpleNamespace
 import pytest
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.base import BaseSession
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.methods import SendMessage
-from aiogram.types import CallbackQuery, Chat, Message, Update, User, Voice
+from aiogram.types import CallbackQuery, Chat, Message, PhotoSize, Update, User, Voice
 
 from app import bot as botmod
 from app import config, rag
@@ -41,7 +43,7 @@ class FakeSession(BaseSession):
 
 class FakeDB:
     def __init__(self):
-        self.credits, self.pending, self.quota, self.messages = 0, None, 0, []
+        self.credits, self.pending, self.quota, self.messages, self.feedback = 0, None, 0, [], []
 
     async def ensure_user(self, uid):
         return {"id": uid, "credits": self.credits, "pending_doc": self.pending}
@@ -59,6 +61,9 @@ class FakeDB:
     async def set_pending_doc(self, uid, d):
         self.pending = d
 
+    async def save_feedback(self, uid, good):
+        self.feedback.append(good)
+
     async def spend_credit(self, uid):
         if self.credits > 0:
             self.credits -= 1
@@ -70,6 +75,7 @@ class FakeDB:
 def env(monkeypatch):
     fake = FakeDB()
     monkeypatch.setattr(botmod, "db", fake)
+    DP.fsm.storage = MemoryStorage()  # FSM state (e.g. "waiting for receipt") must not leak between tests
     monkeypatch.setattr(config, "CARD_NUMBER", "9860 0000 0000 1234")
     monkeypatch.setattr(config, "FREE_DAILY_LIMIT", 3)
 
@@ -81,6 +87,14 @@ def env(monkeypatch):
 
     monkeypatch.setattr(rag, "answer", answer)
     monkeypatch.setattr(rag, "transcribe", transcribe)
+    analyzed = []
+
+    async def analyze_file(uid, parts, caption):
+        analyzed.append((len(parts), caption))
+        return rag.Reply("TAHLIL")
+
+    monkeypatch.setattr(rag, "analyze_file", analyze_file)
+    monkeypatch.setattr(botmod.asyncio, "sleep", _no_sleep)
     session = FakeSession()
     bot = Bot("42:TEST", session=session)
 
@@ -88,10 +102,15 @@ def env(monkeypatch):
         return io.BytesIO(b"OggS-fake")
     monkeypatch.setattr(bot, "download", download)
 
-    return SimpleNamespace(bot=bot, dp=DP, session=session, db=fake)
+    return SimpleNamespace(bot=bot, dp=DP, session=session, db=fake, analyzed=analyzed)
 
 
 _ids = iter(range(1, 10_000))
+_real_sleep = asyncio.sleep
+
+
+async def _no_sleep(_):
+    await _real_sleep(0.05)
 
 
 async def send(env, text=None, **extra):
@@ -149,3 +168,27 @@ async def test_daily_limit(env):
 async def test_admin_commands_hidden_from_users(env):
     await send(env, "/stats")
     assert "Noma'lum buyruq" in env.session.texts()[-1]
+
+
+def _photo(n):
+    return [PhotoSize(file_id=f"p{n}", file_unique_id=f"u{n}", width=800, height=1200, file_size=1000)]
+
+
+async def test_album_pages_analyzed_together(env):
+    await asyncio.gather(
+        send(env, photo=_photo(1), media_group_id="album1", caption="imzolasam bo'ladimi?"),
+        send(env, photo=_photo(2), media_group_id="album1"),
+        send(env, photo=_photo(3), media_group_id="album1"),
+    )
+    assert env.analyzed == [(3, "imzolasam bo'ladimi?")]
+    assert any("3 sahifa" in t for t in env.session.texts())
+
+
+async def test_feedback_saved_and_buttons_removed(env):
+    msg = Message(message_id=next(_ids), date=dt.datetime.now(), chat=CHAT, from_user=USER, text="javob",
+                  reply_markup=botmod.InlineKeyboardMarkup(inline_keyboard=[botmod.FEEDBACK_ROW]))
+    cb = CallbackQuery(id="9", from_user=USER, chat_instance="c", message=msg, data="fb:1")
+    await env.dp.feed_update(env.bot, Update(update_id=next(_ids), callback_query=cb))
+    assert env.db.feedback == [True]
+    edits = [m for m in env.session.sent if type(m).__name__ == "EditMessageReplyMarkup"]
+    assert edits and edits[-1].reply_markup is None
