@@ -1,7 +1,10 @@
 """PostgreSQL + pgvector storage: laws, users, chat history, payments."""
+import json
 import re
 
 import asyncpg
+from aiogram.fsm.state import State
+from aiogram.fsm.storage.base import BaseStorage, StorageKey
 
 from app import config
 
@@ -55,6 +58,12 @@ CREATE TABLE IF NOT EXISTS usage (
     day     DATE NOT NULL,
     count   INT NOT NULL DEFAULT 0,
     PRIMARY KEY (user_id, day)
+);
+
+CREATE TABLE IF NOT EXISTS fsm (
+    key   TEXT PRIMARY KEY,
+    state TEXT,
+    data  JSONB NOT NULL DEFAULT '{}'
 );
 
 CREATE TABLE IF NOT EXISTS feedback (
@@ -314,3 +323,31 @@ async def save_feedback(user_id: int, good: bool) -> None:
 
 async def recent_bad_feedback(limit: int) -> list[asyncpg.Record]:
     return await _run("fetch", "SELECT question, answer FROM feedback WHERE NOT good ORDER BY id DESC LIMIT $1", limit)
+
+
+class PgStorage(BaseStorage):
+    """Bot conversation state ("waiting for receipt") in Postgres, so a Render restart doesn't lose it."""
+
+    @staticmethod
+    def _key(k: StorageKey) -> str:
+        return f"{k.bot_id}:{k.chat_id}:{k.user_id}"
+
+    async def set_state(self, key: StorageKey, state=None) -> None:
+        state = state.state if isinstance(state, State) else state
+        await _run("execute", """INSERT INTO fsm (key, state) VALUES ($1, $2)
+                                 ON CONFLICT (key) DO UPDATE SET state = EXCLUDED.state""", self._key(key), state)
+
+    async def get_state(self, key: StorageKey) -> str | None:
+        return await _run("fetchval", "SELECT state FROM fsm WHERE key=$1", self._key(key))
+
+    async def set_data(self, key: StorageKey, data) -> None:
+        await _run("execute", """INSERT INTO fsm (key, data) VALUES ($1, $2::jsonb)
+                                 ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data""",
+                   self._key(key), json.dumps(dict(data)))
+
+    async def get_data(self, key: StorageKey) -> dict:
+        raw = await _run("fetchval", "SELECT data FROM fsm WHERE key=$1", self._key(key))
+        return json.loads(raw) if raw else {}
+
+    async def close(self) -> None:
+        pass

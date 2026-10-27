@@ -55,7 +55,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     config.require("BOT_TOKEN", "DATABASE_URL", "GEMINI_API_KEY", "CARD_NUMBER", "CARD_HOLDER")
     bot = Bot(config.BOT_TOKEN)
-    dp = Dispatcher()
+    dp = Dispatcher(storage=db.PgStorage())
     dp.include_router(router)
 
     if not config.WEBHOOK_BASE_URL:
