@@ -58,51 +58,61 @@ async def main(argv: list[str]) -> int:
     force = "--force" in argv
     await db.init()
     async with aiohttp.ClientSession(headers={"User-Agent": "Mozilla/5.0 (ai-advokat-uz ingest)"}) as session:
-        ids = [int(a) for a in argv if a.isdigit()]
+        explicit = [int(a) for a in argv if a.isdigit()]
         kinds = await db.law_kinds()
-        if not ids:
-            ids = read_sources() + await db.law_ids()
-            if "--all" in argv:
-                listed = await lexuz.list_laws(session)
-                log.info("lex.uz lists %d laws (amending acts excluded)", len(listed))
-                ids += [doc_id for doc_id, _ in listed]
-            if "--regs" in argv:
-                listings = await asyncio.gather(*(lexuz.list_docs(session, url, lexuz.is_normative)
-                                                  for url in lexuz.REG_LISTS.values()))  # 3 listings in parallel
-                for name, regs in zip(lexuz.REG_LISTS, listings, strict=True):
-                    log.info("lex.uz %s: %d normative acts", name, len(regs))
-                    ids += [i for i, _ in regs]
-                    kinds.update({i: "reg" for i, _ in regs if i not in kinds})
-            ids = list(dict.fromkeys(ids))
-            if not force:  # a restarted run doesn't fetch again what it loaded a few hours ago
-                fresh = set(await db.recently_fetched(hours=20))
-                ids = [i for i in ids if i not in fresh]
-        log.info("%d documents to check", len(ids))
-        sem = asyncio.Semaphore(6)  # parallel downloads: ~6x faster, still gentle on lex.uz
+        # a restarted run doesn't fetch again what it loaded a few hours ago
+        fresh = set() if force or explicit else set(await db.recently_fetched(hours=20))
+        queue: asyncio.Queue = asyncio.Queue()
+        seen: set[int] = set()
+
+        def enqueue(doc_id: int, kind: str) -> None:
+            if doc_id not in seen and doc_id not in fresh:
+                seen.add(doc_id)
+                kinds.setdefault(doc_id, kind)
+                queue.put_nowait(doc_id)
+
+        for doc_id in explicit or read_sources() + await db.law_ids():
+            enqueue(doc_id, kinds.get(doc_id, "law"))
 
         size = {"mb": await db.db_size_mb("reg"), "at": time.monotonic()}
+        result = {"ok": 0, "failed": 0}
 
-        async def one(doc_id: int) -> bool:
-            async with sem:
+        async def worker() -> None:
+            # Pipeline: documents download while the (slow, sequential) lex.uz listings are still being read.
+            while (doc_id := await queue.get()) is not None:
                 kind = kinds.get(doc_id, "law")
                 if kind == "reg":
                     if time.monotonic() - size["at"] > 30:
                         size.update(mb=await db.db_size_mb("reg"), at=time.monotonic())
                     if size["mb"] > MAX_DB_MB:  # free Neon tier is 512 MB: never risk the live bot
-                        return True
+                        continue
                 try:
                     log.info("%s %s", doc_id, await ingest_one(session, doc_id, force, kind))
-                    return True
+                    result["ok"] += 1
                 except Exception:
                     log.exception("%s failed", doc_id)
-                    return False
-                finally:
-                    await asyncio.sleep(1)
+                    result["failed"] += 1
+                await asyncio.sleep(0.5)
 
-        failed = sum(not ok for ok in await asyncio.gather(*(one(i) for i in ids)))
-    log.info("laws: %d ok, %d failed; database %.0f MB", len(ids) - failed, failed, await db.db_size_mb())
+        workers = [asyncio.create_task(worker()) for _ in range(8)]  # 8 parallel downloads, still gentle
+        listings: dict[str, object] = {}
+        if not explicit and "--all" in argv:
+            listings["Qonunlar"] = lexuz.list_laws(session, on_found=lambda i: enqueue(i, "law"))
+        if not explicit and "--regs" in argv:
+            for name, url in lexuz.REG_LISTS.items():
+                listings[name] = lexuz.list_docs(session, url, lexuz.is_normative, on_found=lambda i: enqueue(i, "reg"))
+        for name, listed in zip(listings, await asyncio.gather(*listings.values(), return_exceptions=True), strict=True):
+            if isinstance(listed, BaseException):  # a broken listing must not stop the documents already queued
+                log.error("lex.uz %s listing failed: %r", name, listed)
+            else:
+                log.info("lex.uz %s: %d documents listed", name, len(listed))
+        for _ in workers:
+            queue.put_nowait(None)
+        await asyncio.gather(*workers)
+    total = result["ok"] + result["failed"]
+    log.info("laws: %d ok, %d failed; database %.0f MB", result["ok"], result["failed"], await db.db_size_mb())
     await backfill_embeddings()
-    return 1 if failed > len(ids) // 10 else 0  # a few odd pages (404, empty) must not fail the daily job
+    return 1 if result["failed"] > total // 10 else 0  # a few odd pages (404, empty) must not fail the daily job
 
 
 async def backfill_embeddings(batch: int = 50) -> None:

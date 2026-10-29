@@ -103,13 +103,14 @@ def is_normative(title: str) -> bool:
     return bool(_NORMATIVE.search(title)) and not _NOT_NORMATIVE.search(title)
 
 
-async def list_laws(session: aiohttp.ClientSession, max_pages: int = 200) -> list[tuple[int, str]]:
+async def list_laws(session: aiohttp.ClientSession, max_pages: int = 200, on_found=None) -> list[tuple[int, str]]:
     """Every law on lex.uz except amending/ratifying acts (their changes are already merged into the
     current text of the base law)."""
-    return await list_docs(session, LAWS_LIST, lambda t: not _AMENDING.search(t), max_pages)
+    return await list_docs(session, LAWS_LIST, lambda t: not _AMENDING.search(t), max_pages, on_found)
 
 
-async def list_docs(session: aiohttp.ClientSession, url: str, keep, max_pages: int = 1000) -> list[tuple[int, str]]:
+async def list_docs(session: aiohttp.ClientSession, url: str, keep, max_pages: int = 1000,
+                    on_found=None) -> list[tuple[int, str]]:
     """All documents of one lex.uz listing whose title passes `keep`. The list is an ASP.NET page, so
     "next" is a form postback (pages can't be fetched in parallel)."""
     found: dict[int, str] = {}
@@ -122,8 +123,11 @@ async def list_docs(session: aiohttp.ClientSession, url: str, keep, max_pages: i
         prev_page = page
         for doc_id, title in page:
             title = normalize(re.sub(r"\s+", " ", title)).strip()
-            if keep(title):
-                found.setdefault(abs(int(doc_id)), title)
+            doc_id = abs(int(doc_id))
+            if keep(title) and doc_id not in found:
+                found[doc_id] = title
+                if on_found:  # lets the caller start downloading while the listing continues
+                    on_found(doc_id)
         if 'ucFoundActsControl$LinkButton1' not in html:
             break
         form = _hidden_fields(html) | {"__EVENTTARGET": "ucFoundActsControl$LinkButton1", "__EVENTARGUMENT": ""}

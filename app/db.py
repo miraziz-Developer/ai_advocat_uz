@@ -17,7 +17,8 @@ CREATE TABLE IF NOT EXISTS laws (
     title        TEXT NOT NULL,
     url          TEXT NOT NULL,
     content_hash TEXT NOT NULL,
-    fetched_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+    fetched_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    kind         TEXT NOT NULL DEFAULT 'law'
 );
 
 CREATE TABLE IF NOT EXISTS chunks (
@@ -34,8 +35,7 @@ CREATE TABLE IF NOT EXISTS chunks (
         setweight(to_tsvector('simple', replace(heading, '''', '')), 'B') ||  -- law name + chapter: "Notariat to'g'risida"
         setweight(to_tsvector('simple', replace(body, '''', '')), 'D')) STORED
 );
-ALTER TABLE chunks ALTER COLUMN embedding DROP NOT NULL;
-ALTER TABLE laws ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'law';  -- 'law' | 'reg' (VMQ, PQ, ministry)
+-- laws.kind: 'law' | 'reg' (VMQ, PQ, ministry, Plenum); added by init() on older databases
 CREATE INDEX IF NOT EXISTS chunks_embedding_idx ON chunks USING hnsw (embedding vector_cosine_ops);
 CREATE INDEX IF NOT EXISTS chunks_tsv_idx ON chunks USING gin (tsv);
 CREATE INDEX IF NOT EXISTS chunks_doc_idx ON chunks (doc_id);
@@ -135,7 +135,16 @@ async def _run(method: str, *args, url: str | None = None):
 
 async def init() -> None:
     for url in law_dbs():
-        await (await pool(url)).execute(SCHEMA)
+        p = await pool(url)
+        async with p.acquire() as con:
+            # never queue behind the live bot's queries for long: a waiting ALTER blocks every reader after it
+            await con.execute("SET lock_timeout = '10s'")
+            await con.execute(SCHEMA, timeout=300)
+            missing_kind = not await con.fetchval(
+                "SELECT 1 FROM information_schema.columns WHERE table_name='laws' AND column_name='kind'")
+            if missing_kind:
+                await con.execute("ALTER TABLE laws ADD COLUMN kind TEXT NOT NULL DEFAULT 'law'")
+            await con.execute("RESET lock_timeout")
 
 
 async def _each(method: str, sql: str, *args) -> list:
