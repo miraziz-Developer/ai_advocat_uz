@@ -67,8 +67,9 @@ async def main(argv: list[str]) -> int:
                 log.info("lex.uz lists %d laws (amending acts excluded)", len(listed))
                 ids += [doc_id for doc_id, _ in listed]
             if "--regs" in argv:
-                for name, url in lexuz.REG_LISTS.items():
-                    regs = await lexuz.list_docs(session, url, lexuz.is_normative)
+                listings = await asyncio.gather(*(lexuz.list_docs(session, url, lexuz.is_normative)
+                                                  for url in lexuz.REG_LISTS.values()))  # 3 listings in parallel
+                for name, regs in zip(lexuz.REG_LISTS, listings, strict=True):
                     log.info("lex.uz %s: %d normative acts", name, len(regs))
                     ids += [i for i, _ in regs]
                     kinds.update({i: "reg" for i, _ in regs if i not in kinds})
