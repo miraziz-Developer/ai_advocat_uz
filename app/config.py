@@ -25,6 +25,8 @@ GEMINI_API_KEY = _env("GEMINI_API_KEY", "")
 # their free daily quota is much larger than flash (20 requests/day per flash model).
 _DEFAULT_CHAT = "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.6-flash,gemini-3.5-flash,gemini-3.8-flash,gemini-3.7-flash"
 CHAT_MODELS = [m.strip() for m in _env("CHAT_MODELS", _DEFAULT_CHAT).split(",")]
+# Picks applicable laws from the ~40k-char law list: measured fastest/most available first.
+ROUTER_MODELS = [m.strip() for m in _env("ROUTER_MODELS", "gemini-3.1-flash-lite,gemini-3.6-flash,gemini-3.5-flash-lite").split(",")]
 LITE_MODELS = [m.strip() for m in _env("LITE_MODELS", "gemini-3.1-flash-lite,gemini-3.5-flash-lite,gemini-3.6-flash").split(",")]
 EMBED_MODEL = _env("EMBED_MODEL", "gemini-embedding-001")
 EMBED_DIM = 768  # must match vector(768) in db.SCHEMA

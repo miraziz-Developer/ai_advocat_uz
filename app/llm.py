@@ -93,12 +93,13 @@ async def generate(contents, system: str, models: list[str] | None = None, tempe
     return (resp.text or "").strip()
 
 
-async def generate_json(contents, system: str, schema: dict, models: list[str] | None = None) -> dict:
+async def generate_json(contents, system: str, schema: dict, models: list[str] | None = None,
+                        timeout: float = 60) -> dict:
     cfg = types.GenerateContentConfig(
         system_instruction=system, temperature=0, response_mime_type="application/json", response_schema=schema,
         thinking_config=_FAST_THINKING,
     )
-    resp = await _generate_with_fallback(models or config.CHAT_MODELS, contents, cfg, 60)
+    resp = await _generate_with_fallback(models or config.CHAT_MODELS, contents, cfg, timeout)
     return json.loads(resp.text or "{}")
 
 

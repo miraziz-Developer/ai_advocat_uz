@@ -175,19 +175,26 @@ async def set_embeddings(pairs: list[tuple[int, list[float]]]) -> None:
     )
 
 
-async def search(query_embedding: list[float] | None, query_text: str, limit: int = 8) -> list[asyncpg.Record]:
-    """Hybrid search: vector similarity + keyword match, merged with reciprocal rank fusion.
-    query_embedding=None -> keyword-only (embedding quota exhausted)."""
+async def search(query_embedding: list[float] | None, query_text: str, limit: int = 8,
+                 doc_ids: list[int] | None = None) -> list[asyncpg.Record]:
+    """Hybrid search: vector similarity + keyword match (everywhere, and boosted inside the laws the AI
+    picked as applicable), merged with reciprocal rank fusion.
+    query_embedding=None -> no vector part (embedding quota exhausted / not backfilled yet)."""
     sql = """
-    WITH v AS (
-        SELECT id, row_number() OVER (ORDER BY embedding <=> $1::vector) AS r
+    WITH q AS (SELECT to_tsquery('simple', $2) AS q
+    ), v AS (
+        SELECT id, row_number() OVER (ORDER BY embedding <=> $1::vector) AS r, 1.0 AS w
         FROM chunks WHERE $1::vector IS NOT NULL AND embedding IS NOT NULL ORDER BY embedding <=> $1::vector LIMIT 30
     ), k AS (
-        SELECT id, row_number() OVER (ORDER BY ts_rank(tsv, q, 1) DESC) AS r
-        FROM chunks, to_tsquery('simple', $2) q
-        WHERE tsv @@ q ORDER BY ts_rank(tsv, q, 1) DESC LIMIT 30
+        SELECT id, row_number() OVER (ORDER BY ts_rank(tsv, q, 1) DESC) AS r, 1.0 AS w
+        FROM chunks, q WHERE tsv @@ q ORDER BY ts_rank(tsv, q, 1) DESC LIMIT 30
+    ), d AS (  -- best 3 articles of EACH chosen law, so one big code can't crowd out a specific law
+        SELECT id, r, 2.0 AS w FROM (
+            SELECT id, row_number() OVER (PARTITION BY doc_id ORDER BY ts_rank(tsv, q, 1) DESC) AS r
+            FROM chunks, q WHERE doc_id = ANY($4::bigint[]) AND tsv @@ q) x
+        WHERE r <= 3
     ), fused AS (
-        SELECT id, sum(1.0 / (60 + r)) AS score FROM (SELECT * FROM v UNION ALL SELECT * FROM k) x
+        SELECT id, sum(w / (60 + r)) AS score FROM (SELECT * FROM v UNION ALL SELECT * FROM k UNION ALL SELECT * FROM d) x
         GROUP BY id ORDER BY score DESC LIMIT $3
     )
     SELECT c.article, c.heading, c.anchor, c.body, l.title, l.url
@@ -195,7 +202,11 @@ async def search(query_embedding: list[float] | None, query_text: str, limit: in
     ORDER BY f.score DESC
     """
     embedding = vec(query_embedding) if query_embedding else None
-    return await _run("fetch", sql, embedding, or_query(query_text), limit)
+    return await _run("fetch", sql, embedding, or_query(query_text), limit, doc_ids or [])
+
+
+async def law_catalog() -> list[asyncpg.Record]:
+    return await _run("fetch", "SELECT doc_id, title FROM laws ORDER BY doc_id")
 
 
 _STOP = {"nima", "qanday", "qancha", "qilish", "qilay", "kerak", "bilan", "uchun", "ladi", "bormi", "mumkin",
@@ -204,7 +215,7 @@ _STOP = {"nima", "qanday", "qancha", "qilish", "qilay", "kerak", "bilan", "uchun
          "ozbekiston", "respublikasi", "respublikasining", "respublika", "kodeks", "kodeksi", "kodeksiga", "modda",
          "moddasi", "moddalar", "qonun", "qonuni", "qonunchilik", "qonunchiligi", "belgilangan", "tartibi", "tartibda",
          "tahlili", "choralari", "huquqiy", "boyicha", "togrisida", "togrisidagi", "jazo", "jazosi", "jinoyat",
-         "jinoyati", "beriladi", "javobgarlik"}
+         "jinoyati", "beriladi", "javobgarlik", "huquqbuzarlik", "huquqbuzarliklar", "mamuriy"}
 
 
 def or_query(text: str) -> str:

@@ -113,3 +113,10 @@ def test_law_name():
     from app.ingest import law_name
     assert law_name("O'RQ-900-son 19.01.2024. Yo'l harakati to'g'risida") == "Yo'l harakati to'g'risida"
     assert law_name("28.10.2022. O'zbekiston Respublikasining Mehnat kodeksi") == "O'zbekiston Respublikasining Mehnat kodeksi"
+
+
+def test_title_matches():
+    names = {1: "Aholini shovqinning zararli ta'siridan himoya qilish to'g'risida", 2: "Mehnat kodeksi",
+             3: "Fuqarolarning davlat pensiya ta'minoti to'g'risida"}
+    assert rag.title_matches("shovqin solish, tungi vaqt, fuqarolar huquqi", names) == [1]
+    assert rag.title_matches("pensiya tayinlash", names) == [3]

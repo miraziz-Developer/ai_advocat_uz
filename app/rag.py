@@ -124,23 +124,68 @@ def display_title(title: str) -> str:
     return t[:1].upper() + t[1:]
 
 
-async def search_query(user_id: int, text: str) -> str:
-    """Turns everyday wording ('telefonimni o'g'irlab ketishdi') and follow-ups ('unda nima qilay?') into a
-    standalone query in legal terms ("o'g'rilik jinoyat kodeksi"); keyword search depends on it."""
+ROUTE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "laws": {"type": "array", "items": {"type": "integer"},
+                 "description": "Vaziyatga taalluqli 1-4 ta hujjatning ID raqami (ro'yxatdan, eng muhimi birinchi)"},
+        "terms": {"type": "string",
+                  "description": "Qonun matnida qanday yozilsa, shunday 3-6 ta aniq huquqiy atama (o'zbek lotin)"},
+    },
+    "required": ["laws", "terms"],
+}
+_catalog: tuple[float, dict[int, str], str] = (0.0, {}, "")
+
+
+async def law_catalog() -> tuple[dict[int, str], str]:
+    """All laws in the DB as 'id | name' lines — the AI's table of contents. Cached for an hour."""
+    global _catalog
+    if time.monotonic() - _catalog[0] > 3600:
+        names = {r["doc_id"]: short_title(r["title"])[:90] for r in await db.law_catalog()}  # shorter list = faster
+        _catalog = (time.monotonic(), names, "\n".join(f"{i} | {n}" for i, n in names.items()))
+    return _catalog[1], _catalog[2]
+
+
+async def search_query(user_id: int, text: str) -> tuple[str, list[int]]:
+    """Like a lawyer: decides which laws govern the situation (from the full list of laws in force) and
+    turns everyday wording / follow-ups into legal search terms. Returns (terms, doc_ids)."""
     rows = await db.history(user_id, limit=4)
     convo = "\n".join(f"{r['role']}: {r['content'][:600]}" for r in rows)
-    prompt = (f"Suhbat:\n{convo}\n\nOxirgi xabar: {text}\n\n"
-              "Shu xabar bo'yicha O'zbekiston qonunlaridan tegishli moddalarni qidirish uchun o'zbek (lotin) "
-              "tilida 3-6 ta aniq huquqiy atama yoz (masalan: o'g'rilik; aliment bola; ish haqi to'lanmasligi). "
-              "Qonun matnida qanday yozilsa shunday yoz. "
-              "Kirish so'zi, raqamlash, izoh yozma. \"O'zbekiston\", \"kodeks\", \"modda\" kabi umumiy "
-              "so'zlarni yozma. Faqat atamalarni qaytar.")
+    names, catalog = await law_catalog()
+    prompt = (f"O'zbekistonning amaldagi qonunlari va kodekslari (ID | nomi):\n{catalog}\n\n"
+              f"Suhbat:\n{convo or '-'}\n\nOxirgi xabar: {text}\n\n"
+              "Tajribali advokatdek o'yla: bu vaziyatga qaysi hujjatlar taalluqli? Ro'yxatdan 1-4 ta ID tanla "
+              "(masalan: o'g'rilik — Jinoyat kodeksi; ijara — Fuqarolik kodeksi; ish haqi — Mehnat kodeksi; "
+              "maxsus qonun bo'lsa — uni ham). Qidiruv uchun 3-6 ta aniq huquqiy atama yoz, \"O'zbekiston\", "
+              "\"kodeks\", \"modda\" kabi umumiy so'zlarsiz.")
     try:
-        q = await asyncio.wait_for(llm.generate(prompt, system="Sen huquqiy qidiruv so'rovlarini tuzasan.",
-                                                models=config.LITE_MODELS, timeout=12), 30)
+        plan = await asyncio.wait_for(llm.generate_json(
+            prompt, "Sen O'zbekiston qonunchiligini to'liq biladigan advokatsan.", ROUTE_SCHEMA,
+            models=config.ROUTER_MODELS, timeout=25), 60)
     except Exception:
-        q = ""  # retrieval still works on the raw text
-    return normalize(q or text)
+        log.warning("law routing failed, searching all laws", exc_info=True)
+        return normalize(text), []
+    terms = normalize(plan.get("terms") or text)
+    doc_ids = [i for i in plan.get("laws", []) if i in names][:4]  # model output: keep only real law ids
+    return terms, doc_ids + [i for i in title_matches(terms, names) if i not in doc_ids][:2]
+
+
+_GENERIC = {"huquqi", "huquql", "qonunc", "fuqaro", "davlat", "himoya", "javobg", "majbur", "tartib", "shartn",
+            "faoliy", "respub", "ozbeki", "toglis", "togris", "mamuri", "huquqb", "jinoya"}
+
+
+def title_matches(terms: str, names: dict[int, str]) -> list[int]:
+    """Laws whose very name contains a search term ("shovqin" -> the law on noise): a deterministic safety net
+    for when the AI's pick from ~600 laws misses the specialized one."""
+    stems = {w[:6] for w in re.findall(r"\w+", terms.lower().replace("'", "")) if len(w) >= 6} - _GENERIC
+    flat = {i: n.lower().replace("'", "") for i, n in names.items()}
+    hits = {st: [i for i, n in flat.items() if st in n] for st in stems}
+    out: list[int] = []
+    # rare words first ("shovqin" names 1 law, "solish" names dozens); words in >8 law names say nothing
+    for st in sorted(hits, key=lambda st: len(hits[st])):
+        if len(hits[st]) <= 8:
+            out += [i for i in hits[st] if i not in out]
+    return out[:5]
 
 
 TRANSCRIBE_SYSTEM = """Sen ovozli xabarlarni matnga aylantiruvchisan. Foydalanuvchi o'zbek (yoki rus) tilida,
@@ -158,7 +203,7 @@ async def transcribe(audio: bytes, mime_type: str) -> str:
 _embed_paused_until = 0.0
 
 
-async def retrieve(query: str) -> list:
+async def retrieve(query: str, doc_ids: list[int] | None = None) -> list:
     global _embed_paused_until
     vector = None
     if time.monotonic() >= _embed_paused_until and await db.count_without_embedding():
@@ -172,7 +217,7 @@ async def retrieve(query: str) -> list:
             # Don't retry on every question for a while — each failed call adds latency.
             _embed_paused_until = time.monotonic() + 1800
             log.warning("query embedding failed (%s), keyword search only for 30 min", str(exc)[:120])
-    return await db.search(vector, query)
+    return await db.search(vector, query, doc_ids=doc_ids)
 
 
 def sources_block(rows) -> str:
@@ -206,7 +251,7 @@ def finalize(raw: str, rows) -> Reply:
 
 
 async def answer(user_id: int, text: str) -> Reply:
-    rows = await retrieve(await search_query(user_id, text))
+    rows = await retrieve(*await search_query(user_id, text))
     history = await db.history(user_id)
     contents = llm.history_contents(history, [llm.types.Part(text=f"{sources_block(rows)}\n\nSAVOL: {text}")])
     raw = await llm.generate(contents, SYSTEM.format(today=_today()))
@@ -224,7 +269,8 @@ async def analyze_file(user_id: int, parts: list, caption: str) -> Reply:
         schema=EXTRACT_SCHEMA,
     )
     doc_text = (extracted.get("text") or "")[:20000]
-    rows = await retrieve(normalize(extracted.get("search_query") or caption or doc_text[:500]))
+    situation = f"{extracted.get('doc_type', '')}: {extracted.get('search_query') or caption or doc_text[:500]}"
+    rows = await retrieve(*await search_query(user_id, situation))
     question = caption or "Shu hujjatni tahlil qilib ber."
     user_turn = f"[Yuborilgan hujjat: {extracted.get('doc_type', 'hujjat')}]\n{doc_text}\n\nSAVOL: {question}"
     contents = llm.history_contents(await db.history(user_id, limit=4),
@@ -238,7 +284,7 @@ async def analyze_file(user_id: int, parts: list, caption: str) -> Reply:
 
 async def draft_document(user_id: int, description: str) -> tuple[str, str]:
     """Returns (title, body) of the drafted document."""
-    rows = await retrieve(normalize(description))
+    rows = await retrieve(*await search_query(user_id, f"Hujjat tayyorlash kerak: {description}"))
     history = await db.history(user_id, limit=10)
     contents = llm.history_contents(history, [llm.types.Part(
         text=f"{sources_block(rows)}\n\nYuqoridagi suhbat asosida quyidagi hujjatni tuzib ber: {description}")])
