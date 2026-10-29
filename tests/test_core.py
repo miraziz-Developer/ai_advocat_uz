@@ -120,3 +120,14 @@ def test_title_matches():
              3: "Fuqarolarning davlat pensiya ta'minoti to'g'risida"}
     assert rag.title_matches("shovqin solish, tungi vaqt, fuqarolar huquqi", names) == [1]
     assert rag.title_matches("pensiya tayinlash", names) == [3]
+
+
+def test_topic_laws():
+    names = {1: "Aholini shovqinning zararli ta'siridan himoya qilish to'g'risida",
+             2: "O'zbekiston Respublikasining Mehnat kodeksi", 3: "O'zbekiston Respublikasining Oila kodeksi",
+             4: "O'zbekiston Respublikasining Ma'muriy javobgarlik to'g'risidagi kodeksi"}
+    ids, terms = rag.topic_laws("Qo'shnim har kecha baland musiqa qo'yadi", names)
+    assert ids == [1, 4] and "shovqin" in terms
+    assert rag.topic_laws("Oyligimni 3 oydan beri bermayapti", names)[0] == [2]
+    assert rag.topic_laws("Erim bilan ajrashmoqchiman", names)[0] == [3]
+    assert rag.topic_laws("Salom", names) == ([], "")

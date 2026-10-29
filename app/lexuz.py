@@ -55,7 +55,8 @@ _SUPERSCRIPT = str.maketrans("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹")
 
 LAWS_LIST = "https://lex.uz/uz/search/nat?lang=4&sort_id=3975&form_id=3968"  # "Qonunlar" category
 _AMENDING = re.compile(r"o.zgartish|o.zgartirish|qo.shimcha|kuchini yo.qotgan|kiritish haqida|ratifikatsiya|"
-                       r"to.xtatib turish|bekor qilish haqida|qo.shilish|qo.shilishi haqida|faxriy unvon", re.I)
+                       r"to.xtatib turish|bekor qilish haqida|qo.shilish|qo.shilishi haqida|faxriy unvon|"
+                       r"tasdiqlash to.g.risida|kunini belgilash", re.I)
 
 
 def _hidden_fields(html: str) -> dict:

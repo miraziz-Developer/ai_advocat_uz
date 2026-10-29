@@ -141,17 +141,76 @@ async def law_catalog() -> tuple[dict[int, str], str]:
     """All laws in the DB as 'id | name' lines — the AI's table of contents. Cached for an hour."""
     global _catalog
     if time.monotonic() - _catalog[0] > 3600:
-        names = {r["doc_id"]: short_title(r["title"])[:90] for r in await db.law_catalog()}  # shorter list = faster
+        names = {r["doc_id"]: short_title(r["title"])[:90] for r in await db.law_catalog()  # shorter list = faster
+                 if not _CEREMONIAL.search(r["title"])}
         _catalog = (time.monotonic(), names, "\n".join(f"{i} | {n}" for i, n in names.items()))
     return _catalog[1], _catalog[2]
+
+
+_CEREMONIAL = re.compile(r"tasdiqlash to.g.risida|kunini belgilash|kuni to.g.risida|amalga kiritish tartibi", re.I)
+
+# Everyday situations -> (title fragments of the laws that govern them, extra search terms). Works without AI,
+# so answers stay on the right law even when free-tier models are overloaded. Matched without apostrophes.
+TOPICS = [
+    (r"musiqa|shovqin|baland ovoz|tinchlik bermay|uxlay olmay", ["aholini shovqinning", "mamuriy javobgarlik"],
+     "shovqin osoyishtalik tungi vaqt maishiy shovqin"),
+    (r"ish haq|oylik|oylig|maosh|ishdan bo.?shat|ishdan haydash|tatil|mehnat shartnoma|ish beruvchi|ishxona|ishga ol",
+     ["ozbekiston respublikasining mehnat kodeksi"], "ish haqini tolash muddatlari kechiktirganlik ish beruvchining javobgarligi"),
+    (r"ajrash|aliment|nikoh|erim|xotinim|farzand|vasiylik", ["ozbekiston respublikasining oila kodeksi"],
+     "nikoh aliment bola ota-ona"),
+    (r"ijara|ijarachi|kvartira|uy egasi|kvartirant", ["fuqarolik kodeksi (ikkinchi", "ozbekiston respublikasining uy-joy kodeksi"],
+     "ijara shartnomasi ijaraga beruvchi ijarachi"),
+    (r"ogirla|ogri|firib|urdi|urishdi|kaltak|pora|qamal|jinoyat|tan jarohat", ["ozbekiston respublikasining jinoyat kodeksi"],
+     "jinoyat jazo ozodlikdan mahrum qilish jarima"),
+    (r"jarima|yhxx|gai|inspektor|haydovchilik|prava|mast holda|svetofor|tezlik", ["mamuriy javobgarlik", "yol harakati togrisida"],
+     "haydovchi transport vositasi yol harakati jarima"),
+    (r"kredit|qarz|bank|mikroqarz|nasiya|foiz", ["istemol krediti", "fuqarolik kodeksi (birinchi"], "kredit qarz foiz"),
+    (r"ipoteka|garov", ["ipoteka togrisida", "garov togrisida"], "ipoteka garov"),
+    (r"dokon|sifatsiz|kafolat|tovar|qaytarib olish|xarid|sotib oldim|buzildi|almashtir", ["istemolchilarning huquqlarini"],
+     "istemolchi tovar sifat kafolat sotuvchi"),
+    (r"notarius|ishonchnoma|vasiyat|meros", ["notariat togrisida", "fuqarolik kodeksi (ikkinchi"], "meros vasiyatnoma notarial"),
+    (r"pensiya|nafaqa", ["davlat pensiya taminoti"], "pensiya tayinlash"),
+    (r"maktab|oqish|universitet|kontrakt|oqituvchi|talaba", ["talim togrisida"], "talim oquvchi talaba"),
+    (r"bogcha", ["maktabgacha talim"], "maktabgacha talim"),
+    (r"soliq|yatt|tadbirkor|biznes|patent", ["ozbekiston respublikasining soliq kodeksi"], "soliq soliq tolovchi"),
+    (r"zoravon|kaltakla|tazyiq|himoya order", ["xotin-qizlarni tazyiq"], "zoravonlik himoya order"),
+    (r"advokat", ["advokatura togrisida"], "advokat yuridik yordam"),
+    (r"shikoyat|murojaat|hokimiyat|byurokrat|javob bermay", ["jismoniy va yuridik shaxslarning murojaatlari"], "murojaat korib chiqish"),
+    (r"sud qarori|ijrochi|mib|ijro varaq", ["sud hujjatlari va boshqa organlar"], "ijro hujjati ijrochi"),
+    (r"yer uchast|tomorqa|yer maydon", ["ozbekiston respublikasining yer kodeksi"], "yer uchastkasi"),
+    (r"sugurta|osago", ["sugurta togrisida"], "sugurta"),
+    (r"nogiron", ["nogironligi bolgan shaxslarning"], "nogironlik"),
+    (r"shaxsiy malumot|malumotlarimni|pasport.*tarqat", ["shaxsga doir"], "shaxsga doir malumotlar"),
+]
+
+
+def topic_laws(text: str, names: dict[int, str]) -> tuple[list[int], str]:
+    """Laws (and extra search terms) for everyday situations recognised in the user's own words."""
+    low = normalize(text).lower().replace("'", "")
+    flat = {i: n.lower().replace("'", "") for i, n in names.items()}
+    ids: list[int] = []
+    extra = []
+    for pattern, fragments, terms in TOPICS:
+        if re.search(pattern, low):
+            extra.append(terms)
+            ids += [i for f in fragments for i, n in flat.items() if f in n and i not in ids]
+    return ids[:4], " ".join(extra)
+
+
+_route_paused_until = 0.0
 
 
 async def search_query(user_id: int, text: str) -> tuple[str, list[int]]:
     """Like a lawyer: decides which laws govern the situation (from the full list of laws in force) and
     turns everyday wording / follow-ups into legal search terms. Returns (terms, doc_ids)."""
+    global _route_paused_until
+    names, catalog = await law_catalog()
+    topic_ids, topic_terms = topic_laws(text, names)
+    if time.monotonic() < _route_paused_until:  # models overloaded a moment ago: answer fast from the topic map
+        q = normalize(f"{text} {topic_terms}")
+        return q, topic_ids + [i for i in title_matches(q, names) if i not in topic_ids][:2]
     rows = await db.history(user_id, limit=4)
     convo = "\n".join(f"{r['role']}: {r['content'][:600]}" for r in rows)
-    names, catalog = await law_catalog()
     prompt = (f"O'zbekistonning amaldagi qonunlari va kodekslari (ID | nomi):\n{catalog}\n\n"
               f"Suhbat:\n{convo or '-'}\n\nOxirgi xabar: {text}\n\n"
               "Tajribali advokatdek o'yla: bu vaziyatga qaysi hujjatlar taalluqli? Ro'yxatdan 1-4 ta ID tanla "
@@ -162,11 +221,14 @@ async def search_query(user_id: int, text: str) -> tuple[str, list[int]]:
         plan = await asyncio.wait_for(llm.generate_json(
             prompt, "Sen O'zbekiston qonunchiligini to'liq biladigan advokatsan.", ROUTE_SCHEMA,
             models=config.ROUTER_MODELS, timeout=25), 60)
-    except Exception:
-        log.warning("law routing failed, searching all laws", exc_info=True)
-        return normalize(text), []
-    terms = normalize(plan.get("terms") or text)
+    except Exception as exc:
+        _route_paused_until = time.monotonic() + 300
+        log.warning("law routing failed (%s); using the topic map for 5 min", type(exc).__name__)
+        q = normalize(f"{text} {topic_terms}")
+        return q, topic_ids + [i for i in title_matches(q, names) if i not in topic_ids][:2]
+    terms = normalize(f"{plan.get('terms') or text} {topic_terms}")
     doc_ids = [i for i in plan.get("laws", []) if i in names][:4]  # model output: keep only real law ids
+    doc_ids += [i for i in topic_ids if i not in doc_ids]
     return terms, doc_ids + [i for i in title_matches(terms, names) if i not in doc_ids][:2]
 
 
