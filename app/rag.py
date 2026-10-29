@@ -146,7 +146,9 @@ async def law_catalog() -> tuple[dict[int, str], str]:
     regulation titles would not fit a prompt; those are found by name/topic/keywords). Cached for an hour."""
     global _catalog
     if time.monotonic() - _catalog[0] > 3600:
-        rows = [r for r in await db.law_catalog() if not _CEREMONIAL.search(r["title"])]
+        # "...kodeksini tasdiqlash" laws are one-article formalities; for regulations "...qoidalarini tasdiqlash"
+        # IS the rulebook (traffic rules, VMQ-172), so the filter applies to laws only
+        rows = [r for r in await db.law_catalog() if r["kind"] != "law" or not _CEREMONIAL.search(r["title"])]
         names = {r["doc_id"]: short_title(r["title"])[:90] for r in rows if r["kind"] == "law"}  # shorter = faster
         everything = {r["doc_id"]: short_title(r["title"])[:200] for r in rows}
         _catalog = (time.monotonic(), names, "\n".join(f"{i} | {n}" for i, n in names.items()), everything)
@@ -173,14 +175,16 @@ TOPICS = [
     (r"ijara|ijarachi|kvartira|uy egasi|kvartirant", ["fuqarolik kodeksi (ikkinchi", "ozbekiston respublikasining uy-joy kodeksi"],
      "ijara shartnomasi ijaraga beruvchi ijarachi"),
     (r"ogirla|ogri|firib|urdi|urishdi|kaltak|pora|qamal|jinoyat|tan jarohat", ["ozbekiston respublikasining jinoyat kodeksi"],
-     "jinoyat jazo ozodlikdan mahrum qilish jarima"),
+     "ogrilik talonchilik firibgarlik badanga shikast jazo"),  # "o'g'irlab" is spelt differently from "o'g'rilik"
     (r"jarima|yhxx|gai|inspektor|haydovchilik|prava|mast holda|svetofor|tezlik|radar|kamera|qizil chiroq|"
-     r"mashina|avtomobil|piyoda|parkovka|toxtash joy", ["yol harakati qoidalari", "mamuriy javobgarlik", "yol harakati togrisida"],
+     r"mashina|avtomobil|piyoda|parkovka|toxtash joy",
+     ["yol harakati qoidalarini tasdiqlash", "mamuriy javobgarlik togrisidagi kodeksi", "yol harakati togrisida"],
      "haydovchi transport vositasi yol harakati jarima tezlik"),
     (r"propiska|registratsiya|royxatga tur|yashash joyi|vaqtincha royxat|doimiy royxat",
-     ["royxatga olish", "yashash joyi boyicha"], "yashash joyi royxatga olish doimiy vaqtincha"),
+     ["propiska", "yashash joyi manzilini", "doimiy yashash joyi boyicha"], "propiska yashash joyi royxatga olish doimiy vaqtincha"),
     (r"kommunal|svet|elektr|gaz puli|tabiiy gaz|suv puli|issiq suv|hisoblagich|schetchik|isitish",
-     ["kommunal xizmat", "elektr energiyasidan foydalanish", "tabiiy gazdan foydalanish"],
+     ["elektr energiyasini yetkazib berish tartibi", "elektr va issiqlik energiyasidan foydalanish qoidalari",
+      "hisobga olish uskunala", "tabiiy gaz bilan limitsiz", "suv taminoti va suvoqava kommunal tizimidan foydalanish"],
      "kommunal xizmat isteʼmolchi hisoblagich tolov"),
     (r"kredit|qarz|bank|mikroqarz|nasiya|foiz", ["istemol krediti", "fuqarolik kodeksi (birinchi"], "kredit qarz foiz"),
     (r"ipoteka|garov", ["ipoteka togrisida", "garov togrisida"], "ipoteka garov"),
@@ -211,8 +215,9 @@ def topic_laws(text: str, names: dict[int, str]) -> tuple[list[int], str]:
     for pattern, fragments, terms in TOPICS:
         if re.search(pattern, low):
             extra.append(terms)
-            ids += [i for f in fragments for i, n in flat.items() if f in n and i not in ids]
-    return ids[:4], " ".join(extra)
+            for f in fragments:  # at most 2 documents per fragment, so one generic word can't take every slot
+                ids += [i for i, n in flat.items() if f in n and i not in ids][:2]
+    return ids[:6], " ".join(extra)
 
 
 _route_paused_until = 0.0

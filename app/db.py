@@ -271,6 +271,13 @@ _STOP = {"nima", "qanday", "qancha", "qilish", "qilay", "kerak", "bilan", "uchun
          "jinoyati", "beriladi", "javobgarlik", "huquqbuzarlik", "huquqbuzarliklar", "mamuriy"}
 
 
+def _stem(w: str) -> str:
+    """Uzbek stem for prefix search: suffixes change the root's last consonant (tezlik -> tezligi,
+    oylik -> oyligi, qishloq -> qishlog'i), so drop a final k/q and keep at most 5 letters."""
+    stem = w[:max(4, min(len(w) - 2, 5))]
+    return stem[:-1] if len(stem) > 4 and stem[-1] in "kq" else stem
+
+
 def or_query(text: str) -> str:
     """Any-word prefix match ('mehn:* | shartn:* | ...'). Uzbek adds suffixes (bola-lar-iga), so each word is
     cut to a short stem; AND of 15 words would almost never match."""
@@ -278,7 +285,7 @@ def or_query(text: str) -> str:
     for w in re.findall(r"\w+", text.lower().replace("'", "")):
         if w in _STOP or (len(w) < 3 and not w.isdigit()):
             continue
-        words.append(w if w.isdigit() or len(w) <= 4 else w[:max(4, min(len(w) - 2, 6))] + ":*")
+        words.append(w if w.isdigit() or len(w) <= 4 else _stem(w) + ":*")
     return " | ".join(dict.fromkeys(words))
 
 
