@@ -107,3 +107,9 @@ def test_display_title():
     assert rag.display_title("28.10.2022. O'zbekiston Respublikasining Mehnat kodeksi") == "Mehnat kodeksi"
     assert rag.display_title("221-I-son 26.04.1996. Iste'molchilarning huquqlarini himoya qilish to'g'risida") == \
         "Iste'molchilarning huquqlarini himoya qilish to'g'risidagi qonun"
+
+
+def test_law_name():
+    from app.ingest import law_name
+    assert law_name("O'RQ-900-son 19.01.2024. Yo'l harakati to'g'risida") == "Yo'l harakati to'g'risida"
+    assert law_name("28.10.2022. O'zbekiston Respublikasining Mehnat kodeksi") == "O'zbekiston Respublikasining Mehnat kodeksi"

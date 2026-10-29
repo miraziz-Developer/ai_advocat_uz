@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS chunks (
     -- apostrophes removed so o'g'irlik is one word (ogirlik), matching or_query()
     tsv       tsvector GENERATED ALWAYS AS (
         setweight(to_tsvector('simple', replace(article, '''', '')), 'A') ||  -- "169-modda. O'g'rilik" says what it is about
+        setweight(to_tsvector('simple', replace(heading, '''', '')), 'B') ||  -- law name + chapter: "Notariat to'g'risida"
         setweight(to_tsvector('simple', replace(body, '''', '')), 'D')) STORED
 );
 ALTER TABLE chunks ALTER COLUMN embedding DROP NOT NULL;
@@ -127,6 +128,15 @@ def vec(values: list[float]) -> str:
 
 
 # ---------- laws ----------
+
+async def recently_fetched(hours: int) -> list[int]:
+    return [r["doc_id"] for r in await _run(
+        "fetch", "SELECT doc_id FROM laws WHERE fetched_at > now() - make_interval(hours => $1)", hours)]
+
+
+async def law_ids() -> list[int]:
+    return [r["doc_id"] for r in await _run("fetch", "SELECT doc_id FROM laws ORDER BY doc_id")]
+
 
 async def law_hash(doc_id: int) -> str | None:
     return await _run("fetchval", "SELECT content_hash FROM laws WHERE doc_id=$1", doc_id)

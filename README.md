@@ -85,9 +85,10 @@ qo'shing va `python -m app.ingest` buyrug'ini ishga tushiring. Ruscha versiyanin
   Daromad o'sganda Click/Payme merchant API'ga o'tish kerak: unda to'lovni server o'zi tasdiqlaydi.
 * Bepul Gemini tarifida yuborilgan ma'lumotlar Google tomonidan modelni yaxshilash uchun ishlatilishi mumkin.
   Limit tugasa yoki foydalanuvchilar ko'paysa, AI Studio'da billing yoqing.
-* Bazada 15 ta kodeks va 8 ta muhim qonun bor (Konstitutsiya, Fuqarolik, Mehnat, Jinoyat, MJtK, Oila, Uy-joy,
-  Soliq, protsessual kodekslar, Yer, Bojxona; iste'molchi, yo'l harakati, murojaatlar, shaxsiy ma'lumot, bandlik,
-  sud qarorlarini ijro etish, xotin-qizlar himoyasi, ta'lim). Yangilari `data/sources.txt` orqali qo'shiladi.
+* Bazada lex.uz'dagi **barcha amaldagi qonunlar va kodekslar** bor (~594 ta hujjat, ~25 600 bo'lak). Kunlik
+  workflow (`python -m app.ingest --all`) lex.uz ro'yxatini qayta o'qiydi: yangi qonunlarni qo'shadi va
+  o'zgarganlarini yangilaydi. O'zgartirish kirituvchi qonunlar alohida yuklanmaydi, chunki ularning matni asosiy qonunga
+  allaqachon kiritilgan bo'ladi.
 * Bepul Gemini tarifida embedding kuniga taxminan 1000 ta so'rov bilan cheklangan. Barcha kodekslarni boshlang'ich
   yuklash shu sababli taxminan bir hafta davom etadi, buni kunlik GitHub Actions o'zi bajaradi. Limit tugaganda
   bot kalit so'z bo'yicha qidiruvga o'tadi va ishlashda davom etadi. Billing yoqilsa, hammasi 10 daqiqada yuklanadi.

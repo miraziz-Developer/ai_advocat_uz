@@ -53,6 +53,44 @@ async def fetch_html(session: aiohttp.ClientSession, doc_id: int) -> str:
 _SUPERSCRIPT = str.maketrans("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹")
 
 
+LAWS_LIST = "https://lex.uz/uz/search/nat?lang=4&sort_id=3975&form_id=3968"  # "Qonunlar" category
+_AMENDING = re.compile(r"o.zgartish|o.zgartirish|qo.shimcha|kuchini yo.qotgan|kiritish haqida|ratifikatsiya|"
+                       r"to.xtatib turish|bekor qilish haqida|qo.shilish|qo.shilishi haqida|faxriy unvon", re.I)
+
+
+def _hidden_fields(html: str) -> dict:
+    soup = BeautifulSoup(html, "html.parser")
+    return {i["name"]: i.get("value", "") for i in soup.find_all("input", type="hidden") if i.get("name")}
+
+
+async def list_laws(session: aiohttp.ClientSession, max_pages: int = 200) -> list[tuple[int, str]]:
+    """Every law on lex.uz except amending/ratifying acts (their changes are already merged into the
+    current text of the base law). The list is an ASP.NET page, so "next" is a form postback."""
+    found: dict[int, str] = {}
+    async with session.get(LAWS_LIST, timeout=aiohttp.ClientTimeout(total=120)) as r:
+        html = await r.text()
+    prev_page: list = []
+    for _ in range(max_pages):
+        page = re.findall(r'href="/uz/docs/(-?\d+)" target="_blank">([^<]{3,400})', html)
+        if not page or page == prev_page:  # past the last page
+            break
+        prev_page = page
+        for doc_id, title in page:
+            title = normalize(re.sub(r"\s+", " ", title)).strip()
+            if not _AMENDING.search(title):
+                found.setdefault(abs(int(doc_id)), title)
+        if 'ucFoundActsControl$LinkButton1' not in html:
+            break
+        form = _hidden_fields(html) | {"__EVENTTARGET": "ucFoundActsControl$LinkButton1", "__EVENTARGUMENT": ""}
+        await asyncio.sleep(1)  # be polite
+        async with session.post(LAWS_LIST, data=form, timeout=aiohttp.ClientTimeout(total=120)) as r:
+            next_html = await r.text()
+        if next_html == html:
+            break
+        html = next_html
+    return list(found.items())
+
+
 def _text(el) -> str:
     for junk in el.select(".lx_elem2"):
         junk.decompose()
