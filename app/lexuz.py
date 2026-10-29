@@ -59,6 +59,20 @@ _AMENDING = re.compile(r"o.zgartish|o.zgartirish|qo.shimcha|kuchini yo.qotgan|ki
                        r"tasdiqlash to.g.risida|kunini belgilash", re.I)
 
 
+async def _request(session: aiohttp.ClientSession, method: str, url: str, data: dict | None = None) -> str:
+    """One listing page; a listing is ~600 sequential requests, so one network hiccup must not lose it all."""
+    for attempt in range(4):
+        try:
+            async with session.request(method, url, data=data, timeout=aiohttp.ClientTimeout(total=90)) as r:
+                r.raise_for_status()
+                return await r.text()
+        except (TimeoutError, aiohttp.ClientError):
+            if attempt == 3:
+                raise
+            await asyncio.sleep(5 * (attempt + 1))
+    raise AssertionError("unreachable")
+
+
 def _hidden_fields(html: str) -> dict:
     soup = BeautifulSoup(html, "html.parser")
     return {i["name"]: i.get("value", "") for i in soup.find_all("input", type="hidden") if i.get("name")}
@@ -99,8 +113,7 @@ async def list_docs(session: aiohttp.ClientSession, url: str, keep, max_pages: i
     """All documents of one lex.uz listing whose title passes `keep`. The list is an ASP.NET page, so
     "next" is a form postback (pages can't be fetched in parallel)."""
     found: dict[int, str] = {}
-    async with session.get(url, timeout=aiohttp.ClientTimeout(total=120)) as r:
-        html = await r.text()
+    html = await _request(session, "GET", url)
     prev_page: list = []
     for _ in range(max_pages):
         page = re.findall(r'href="/uz/docs/(-?\d+)" target="_blank">([^<]{3,400})', html)
@@ -115,8 +128,7 @@ async def list_docs(session: aiohttp.ClientSession, url: str, keep, max_pages: i
             break
         form = _hidden_fields(html) | {"__EVENTTARGET": "ucFoundActsControl$LinkButton1", "__EVENTARGUMENT": ""}
         await asyncio.sleep(0.5)  # be polite
-        async with session.post(url, data=form, timeout=aiohttp.ClientTimeout(total=120)) as r:
-            next_html = await r.text()
+        next_html = await _request(session, "POST", url, form)
         if next_html == html:
             break
         html = next_html
