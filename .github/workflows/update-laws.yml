@@ -1,21 +1,30 @@
-# Daily refresh of laws from lex.uz (free on GitHub Actions). Unchanged laws are skipped, so after the
-# initial load (free Gemini tier: ~1000 embeddings/day, i.e. about a week) a run only fetches pages.
+# Daily refresh of laws from lex.uz (free on GitHub Actions). Unchanged laws are skipped.
+# Regulations (VMQ, Presidential, ministry normative acts, Supreme Court Plenum) are refreshed on Mondays,
+# or on demand: Actions -> update-laws -> Run workflow -> regs = true.
 name: update-laws
 on:
   schedule:
     - cron: "30 7 * * *"   # 12:30 Tashkent, right after the Gemini daily quota resets (midnight Pacific)
   workflow_dispatch:
+    inputs:
+      regs:
+        description: "Also load regulations (VMQ, Presidential, ministry, Plenum)"
+        type: boolean
+        default: false
 jobs:
   ingest:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt
-      - run: python -m app.ingest --all $( [ "$(date +%u)" = 1 ] && echo --regs )  # regulations weekly (Mon)
+      - run: |
+          FLAGS="--all"
+          if [ "$(date +%u)" = 1 ] || [ "${{ inputs.regs }}" = "true" ]; then FLAGS="$FLAGS --regs"; fi
+          python -u -m app.ingest $FLAGS
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           DATABASE_URL_REGS: ${{ secrets.DATABASE_URL_REGS }}
