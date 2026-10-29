@@ -131,3 +131,12 @@ def test_topic_laws():
     assert rag.topic_laws("Oyligimni 3 oydan beri bermayapti", names)[0] == [2]
     assert rag.topic_laws("Erim bilan ajrashmoqchiman", names)[0] == [3]
     assert rag.topic_laws("Salom", names) == ([], "")
+
+
+def test_is_normative():
+    assert lexuz.is_normative("Yo'l harakati qoidalarini tasdiqlash to'g'risida")
+    assert lexuz.is_normative("Fuqarolarni yashash joyi bo'yicha ro'yxatga olish tartibi to'g'risidagi nizom")
+    assert lexuz.is_normative("Oliy sudi Plenumining sud xarajatlarini undirish amaliyoti to'g'risida")
+    assert not lexuz.is_normative("4-1203-2301/1131-sonli ish")
+    assert not lexuz.is_normative("Kommunal xizmatlar nizomiga o'zgartirishlar kiritish to'g'risida")
+    assert not lexuz.is_normative("«Inson faxri» milliy mukofotini ta'sis etish to'g'risida")

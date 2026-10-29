@@ -70,6 +70,7 @@ REG_LISTS = {
     "VMQ": "https://lex.uz/uz/search/nat?lang=4&sort_id=3988",
     "Prezident": "https://lex.uz/uz/search/nat?lang=4&sort_id=3985",
     "Idoraviy": "https://lex.uz/uz/search/nat?lang=4&sort_id=3991",
+    "Sud amaliyoti": "https://lex.uz/uz/search/court?lang=4",  # Supreme Court Plenum: how courts apply the law
 }
 _NORMATIVE = re.compile(r"nizom|qoida|tartib|reglament|yo.riqnoma|me.yor|talablar|tarif|to.lov|jarima|"
                         r"ro.yxatga olish|imtiyoz|nafaqa|pensiya|kommunal|yo.l harakati", re.I)
@@ -78,7 +79,13 @@ _NOT_NORMATIVE = re.compile(r"o.zgartish|o.zgartirish|qo.shimcha|kuchini yo.qotg
                             r"ozod qilish haqida|vaqtinchalik|tajriba tariqasida", re.I)
 
 
+_PLENUM = re.compile(r"plenum|sud amaliyoti|sudlar tomonidan", re.I)
+
+
 def is_normative(title: str) -> bool:
+    """Rules a citizen can rely on; Plenum resolutions count too (individual court cases don't)."""
+    if _PLENUM.search(title):
+        return not _AMENDING.search(title)
     return bool(_NORMATIVE.search(title)) and not _NOT_NORMATIVE.search(title)
 
 
