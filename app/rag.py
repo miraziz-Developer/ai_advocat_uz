@@ -174,8 +174,13 @@ TOPICS = [
      "nikoh aliment bola ota-ona"),
     (r"ijara|ijarachi|kvartira|uy egasi|kvartirant", ["fuqarolik kodeksi (ikkinchi", "ozbekiston respublikasining uy-joy kodeksi"],
      "ijara shartnomasi ijaraga beruvchi ijarachi"),
-    (r"ogirla|ogri|firib|urdi|urishdi|kaltak|pora|qamal|jinoyat|tan jarohat", ["ozbekiston respublikasining jinoyat kodeksi"],
-     "ogrilik talonchilik firibgarlik badanga shikast jazo"),  # "o'g'irlab" is spelt differently from "o'g'rilik"
+    # "o'g'irlab" is spelt differently from "o'g'rilik", so each crime carries its legal term
+    (r"ogirla|ogri|ugirla", ["ozbekiston respublikasining jinoyat kodeksi"], "ogrilik"),
+    (r"firib|aldab|aldash|aldov|aldadi|pulimni olib|kartamdan", ["ozbekiston respublikasining jinoyat kodeksi"], "firibgarlik"),
+    (r"urdi|urishdi|kaltak|tan jarohat|jarohat|dopposla",
+     ["ozbekiston respublikasining jinoyat kodeksi", "mamuriy javobgarlik togrisidagi kodeksi"], "qasddan badanga yengil shikast"),
+    (r"pora|qamal|jinoyat|tergov|ushlab olishdi|hibs", ["ozbekiston respublikasining jinoyat kodeksi", "jinoyat-protsessual"],
+     "jinoyat jazo ushlab turish"),
     (r"jarima|yhxx|gai|inspektor|haydovchilik|prava|mast holda|svetofor|tezlik|radar|kamera|qizil chiroq|"
      r"mashina|avtomobil|piyoda|parkovka|toxtash joy",
      ["yol harakati qoidalarini tasdiqlash", "mamuriy javobgarlik togrisidagi kodeksi", "yol harakati togrisida"],
@@ -231,8 +236,7 @@ async def search_query(user_id: int, text: str) -> tuple[str, list[int]]:
     everything = await all_doc_names()
     topic_ids, topic_terms = topic_laws(text, everything)
     if time.monotonic() < _route_paused_until:  # models overloaded a moment ago: answer fast from the topic map
-        q = normalize(f"{text} {topic_terms}")
-        return q, topic_ids + [i for i in title_matches(q, everything) if i not in topic_ids][:2]
+        return _without_ai(text, topic_ids, topic_terms, everything)
     rows = await db.history(user_id, limit=4)
     convo = "\n".join(f"{r['role']}: {r['content'][:600]}" for r in rows)
     prompt = (f"O'zbekistonning amaldagi qonunlari va kodekslari (ID | nomi):\n{catalog}\n\n"
@@ -248,12 +252,18 @@ async def search_query(user_id: int, text: str) -> tuple[str, list[int]]:
     except Exception as exc:
         _route_paused_until = time.monotonic() + 300
         log.warning("law routing failed (%s); using the topic map for 5 min", type(exc).__name__)
-        q = normalize(f"{text} {topic_terms}")
-        return q, topic_ids + [i for i in title_matches(q, everything) if i not in topic_ids][:2]
+        return _without_ai(text, topic_ids, topic_terms, everything)
     terms = normalize(f"{plan.get('terms') or text} {topic_terms}")
     doc_ids = [i for i in plan.get("laws", []) if i in names][:4]  # model output: keep only real law ids
     doc_ids += [i for i in topic_ids if i not in doc_ids]
     return terms, doc_ids + [i for i in title_matches(terms, everything) if i not in doc_ids][:2]
+
+
+def _without_ai(text: str, topic_ids: list[int], topic_terms: str, names: dict[int, str]) -> tuple[str, list[int]]:
+    """Search when the AI router is unavailable. A recognised situation searches its legal terms only: the user's
+    own words ("telefonimni", "pulimni olishdi") would match unrelated acts (telecom rules, bribery)."""
+    q = normalize(topic_terms or text)
+    return q, topic_ids + [i for i in title_matches(q, names) if i not in topic_ids][:2]
 
 
 _GENERIC = {"huquqi", "huquql", "qonunc", "fuqaro", "davlat", "himoya", "javobg", "majbur", "tartib", "shartn",
