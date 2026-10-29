@@ -64,11 +64,35 @@ def _hidden_fields(html: str) -> dict:
     return {i["name"]: i.get("value", "") for i in soup.find_all("input", type="hidden") if i.get("name")}
 
 
+# Government (VMQ), Presidential and ministry acts. Only normative ones (rules, regulations, procedures) —
+# the rest (appointments, events, programmes, amendments) don't tell a citizen what the rules are.
+REG_LISTS = {
+    "VMQ": "https://lex.uz/uz/search/nat?lang=4&sort_id=3988",
+    "Prezident": "https://lex.uz/uz/search/nat?lang=4&sort_id=3985",
+    "Idoraviy": "https://lex.uz/uz/search/nat?lang=4&sort_id=3991",
+}
+_NORMATIVE = re.compile(r"nizom|qoida|tartib|reglament|yo.riqnoma|me.yor|talablar|tarif|to.lov|jarima|"
+                        r"ro.yxatga olish|imtiyoz|nafaqa|pensiya|kommunal|yo.l harakati", re.I)
+_NOT_NORMATIVE = re.compile(r"o.zgartish|o.zgartirish|qo.shimcha|kuchini yo.qotgan|bekor qilish|ta.sis etish|"
+                            r"mukofot|nishon|oyligi|tashkil etish|ratifikatsiya|xalqaro|tayinlash haqida|"
+                            r"ozod qilish haqida|vaqtinchalik|tajriba tariqasida", re.I)
+
+
+def is_normative(title: str) -> bool:
+    return bool(_NORMATIVE.search(title)) and not _NOT_NORMATIVE.search(title)
+
+
 async def list_laws(session: aiohttp.ClientSession, max_pages: int = 200) -> list[tuple[int, str]]:
     """Every law on lex.uz except amending/ratifying acts (their changes are already merged into the
-    current text of the base law). The list is an ASP.NET page, so "next" is a form postback."""
+    current text of the base law)."""
+    return await list_docs(session, LAWS_LIST, lambda t: not _AMENDING.search(t), max_pages)
+
+
+async def list_docs(session: aiohttp.ClientSession, url: str, keep, max_pages: int = 1000) -> list[tuple[int, str]]:
+    """All documents of one lex.uz listing whose title passes `keep`. The list is an ASP.NET page, so
+    "next" is a form postback (pages can't be fetched in parallel)."""
     found: dict[int, str] = {}
-    async with session.get(LAWS_LIST, timeout=aiohttp.ClientTimeout(total=120)) as r:
+    async with session.get(url, timeout=aiohttp.ClientTimeout(total=120)) as r:
         html = await r.text()
     prev_page: list = []
     for _ in range(max_pages):
@@ -78,13 +102,13 @@ async def list_laws(session: aiohttp.ClientSession, max_pages: int = 200) -> lis
         prev_page = page
         for doc_id, title in page:
             title = normalize(re.sub(r"\s+", " ", title)).strip()
-            if not _AMENDING.search(title):
+            if keep(title):
                 found.setdefault(abs(int(doc_id)), title)
         if 'ucFoundActsControl$LinkButton1' not in html:
             break
         form = _hidden_fields(html) | {"__EVENTTARGET": "ucFoundActsControl$LinkButton1", "__EVENTARGUMENT": ""}
-        await asyncio.sleep(1)  # be polite
-        async with session.post(LAWS_LIST, data=form, timeout=aiohttp.ClientTimeout(total=120)) as r:
+        await asyncio.sleep(0.5)  # be polite
+        async with session.post(url, data=form, timeout=aiohttp.ClientTimeout(total=120)) as r:
             next_html = await r.text()
         if next_html == html:
             break

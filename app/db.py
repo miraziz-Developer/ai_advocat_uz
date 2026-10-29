@@ -1,4 +1,5 @@
 """PostgreSQL + pgvector storage: laws, users, chat history, payments."""
+import asyncio
 import json
 import re
 
@@ -34,6 +35,7 @@ CREATE TABLE IF NOT EXISTS chunks (
         setweight(to_tsvector('simple', replace(body, '''', '')), 'D')) STORED
 );
 ALTER TABLE chunks ALTER COLUMN embedding DROP NOT NULL;
+ALTER TABLE laws ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'law';  -- 'law' | 'reg' (VMQ, PQ, ministry)
 CREATE INDEX IF NOT EXISTS chunks_embedding_idx ON chunks USING hnsw (embedding vector_cosine_ops);
 CREATE INDEX IF NOT EXISTS chunks_tsv_idx ON chunks USING gin (tsv);
 CREATE INDEX IF NOT EXISTS chunks_doc_idx ON chunks (doc_id);
@@ -92,35 +94,56 @@ CREATE TABLE IF NOT EXISTS payments (
 _pool: asyncpg.Pool | None = None
 
 
-async def pool() -> asyncpg.Pool:
-    global _pool
-    if _pool is None:
+_pools: dict[str, asyncpg.Pool] = {}
+
+
+async def pool(url: str | None = None) -> asyncpg.Pool:
+    url = url or config.DATABASE_URL
+    if url not in _pools:
         # statement_cache_size=0 keeps it working behind PgBouncer (Supabase/Neon poolers).
         # Neon closes idle connections (and suspends compute after 5 min), so never reuse a connection
         # that sat idle while an AI call was running.
-        _pool = await asyncpg.create_pool(
-            config.DATABASE_URL, min_size=0, max_size=5, statement_cache_size=0,
+        _pools[url] = await asyncpg.create_pool(
+            url, min_size=0, max_size=5, statement_cache_size=0,
             max_inactive_connection_lifetime=30, command_timeout=30,
         )
-    return _pool
+    return _pools[url]
+
+
+def law_dbs() -> list[str]:
+    """Free Neon projects hold 0.5 GB each, so regulations can live in a second database (DATABASE_URL_REGS).
+    Users, payments and chat history always stay in the main one."""
+    return list(dict.fromkeys(u for u in (config.DATABASE_URL, config.DATABASE_URL_REGS) if u))
+
+
+def db_for(kind: str) -> str:
+    return config.DATABASE_URL_REGS if kind == "reg" and config.DATABASE_URL_REGS else config.DATABASE_URL
 
 
 _DROPPED = (asyncpg.ConnectionDoesNotExistError, asyncpg.InterfaceError, ConnectionError, OSError)
 
 
-async def _run(method: str, *args):
+async def _run(method: str, *args, url: str | None = None):
     """Single-statement call with one retry when the server dropped the connection before answering."""
     for attempt in range(2):
         try:
-            return await getattr(await pool(), method)(*args)
+            return await getattr(await pool(url), method)(*args)
         except _DROPPED:
             if attempt:
                 raise
 
 
 async def init() -> None:
-    p = await pool()
-    await p.execute(SCHEMA)
+    for url in law_dbs():
+        await (await pool(url)).execute(SCHEMA)
+
+
+async def _each(method: str, sql: str, *args) -> list:
+    """Same read on every law database, results concatenated."""
+    out: list = []
+    for url in law_dbs():
+        out += await _run(method, sql, *args, url=url)
+    return out
 
 
 def vec(values: list[float]) -> str:
@@ -130,27 +153,43 @@ def vec(values: list[float]) -> str:
 # ---------- laws ----------
 
 async def recently_fetched(hours: int) -> list[int]:
-    return [r["doc_id"] for r in await _run(
+    return [r["doc_id"] for r in await _each(
         "fetch", "SELECT doc_id FROM laws WHERE fetched_at > now() - make_interval(hours => $1)", hours)]
 
 
 async def law_ids() -> list[int]:
-    return [r["doc_id"] for r in await _run("fetch", "SELECT doc_id FROM laws ORDER BY doc_id")]
+    return sorted(r["doc_id"] for r in await _each("fetch", "SELECT doc_id FROM laws"))
 
 
 async def law_hash(doc_id: int) -> str | None:
-    return await _run("fetchval", "SELECT content_hash FROM laws WHERE doc_id=$1", doc_id)
+    for url in law_dbs():
+        if h := await _run("fetchval", "SELECT content_hash FROM laws WHERE doc_id=$1", doc_id, url=url):
+            return h
+    return None
 
 
-async def replace_law(doc_id: int, title: str, url: str, content_hash: str, rows: list[tuple]) -> None:
+async def law_kinds() -> dict[int, str]:
+    return {r["doc_id"]: r["kind"] for r in await _each("fetch", "SELECT doc_id, kind FROM laws")}
+
+
+async def db_size_mb(kind: str = "law") -> float:
+    return float(await _run("fetchval", "SELECT pg_database_size(current_database()) / 1048576.0", url=db_for(kind)))
+
+
+async def replace_law(doc_id: int, title: str, url: str, content_hash: str, rows: list[tuple],
+                      kind: str = "law") -> None:
     """rows: (article, heading, anchor, body). Atomic: old version stays until the new one is complete.
     Embeddings are filled in later by set_embeddings()."""
-    p = await pool()
+    target = db_for(kind)
+    for url in law_dbs():  # a document may move between databases (e.g. regs loaded before the 2nd DB existed)
+        if url != target:
+            await _run("execute", "DELETE FROM laws WHERE doc_id=$1", doc_id, url=url)
+    p = await pool(target)
     async with p.acquire() as con, con.transaction():
         await con.execute("DELETE FROM laws WHERE doc_id=$1", doc_id)
         await con.execute(
-            "INSERT INTO laws (doc_id, title, url, content_hash) VALUES ($1,$2,$3,$4)",
-            doc_id, title, url, content_hash,
+            "INSERT INTO laws (doc_id, title, url, content_hash, kind) VALUES ($1,$2,$3,$4,$5)",
+            doc_id, title, url, content_hash, kind,
         )
         await con.executemany(
             "INSERT INTO chunks (doc_id, article, heading, anchor, body) VALUES ($1,$2,$3,$4,$5)",
@@ -161,12 +200,14 @@ async def replace_law(doc_id: int, title: str, url: str, content_hash: str, rows
 async def chunks_without_embedding(limit: int) -> list[asyncpg.Record]:
     return await _run("fetch",
         """SELECT c.id, c.article, c.heading, c.body, l.title FROM chunks c JOIN laws l USING (doc_id)
-           WHERE c.embedding IS NULL ORDER BY c.id LIMIT $1""", limit,
+           WHERE c.embedding IS NULL AND l.kind = 'law' ORDER BY c.id LIMIT $1""", limit,
     )
 
 
 async def count_without_embedding() -> int:
-    return await _run("fetchval", "SELECT count(*) FROM chunks WHERE embedding IS NULL")
+    # only laws get embeddings: ~100k regulation chunks would take months of free quota and too much space
+    return await _run("fetchval", """SELECT count(*) FROM chunks c JOIN laws l USING (doc_id)
+                                     WHERE c.embedding IS NULL AND l.kind = 'law'""")
 
 
 async def set_embeddings(pairs: list[tuple[int, list[float]]]) -> None:
@@ -197,16 +238,19 @@ async def search(query_embedding: list[float] | None, query_text: str, limit: in
         SELECT id, sum(w / (60 + r)) AS score FROM (SELECT * FROM v UNION ALL SELECT * FROM k UNION ALL SELECT * FROM d) x
         GROUP BY id ORDER BY score DESC LIMIT $3
     )
-    SELECT c.article, c.heading, c.anchor, c.body, l.title, l.url
+    SELECT c.article, c.heading, c.anchor, c.body, l.title, l.url, l.kind, f.score
     FROM fused f JOIN chunks c ON c.id = f.id JOIN laws l ON l.doc_id = c.doc_id
     ORDER BY f.score DESC
     """
     embedding = vec(query_embedding) if query_embedding else None
-    return await _run("fetch", sql, embedding, or_query(query_text), limit, doc_ids or [])
+    args = (embedding, or_query(query_text), limit, doc_ids or [])
+    results = await asyncio.gather(*(_run("fetch", sql, *args, url=u) for u in law_dbs()))
+    # rank-fusion scores are comparable across databases, so merging keeps the best overall
+    return sorted((r for rows in results for r in rows), key=lambda r: r["score"], reverse=True)[:limit]
 
 
 async def law_catalog() -> list[asyncpg.Record]:
-    return await _run("fetch", "SELECT doc_id, title FROM laws ORDER BY doc_id")
+    return sorted(await _each("fetch", "SELECT doc_id, title, kind FROM laws"), key=lambda r: r["doc_id"])
 
 
 _STOP = {"nima", "qanday", "qancha", "qilish", "qilay", "kerak", "bilan", "uchun", "ladi", "bormi", "mumkin",
@@ -319,8 +363,8 @@ async def revoke_payment(payment_id: int) -> asyncpg.Record | None:
         return row
 
 
-async def stats() -> asyncpg.Record:
-    return await _run("fetchrow",
+async def stats() -> dict:
+    row = dict(await _run("fetchrow",
         """SELECT (SELECT count(*) FROM users) AS users,
                   (SELECT count(*) FROM laws) AS laws,
                   (SELECT count(*) FROM chunks) AS chunks,
@@ -329,7 +373,13 @@ async def stats() -> asyncpg.Record:
                   (SELECT count(*) FROM feedback WHERE good) AS good,
                   (SELECT count(*) FROM feedback WHERE NOT good) AS bad,
                   (SELECT coalesce(sum(amount),0) FROM payments WHERE status='approved') AS revenue"""
-    )
+    ))
+    for url in law_dbs()[1:]:  # regulations database, if configured
+        extra = await _run("fetchrow", "SELECT (SELECT count(*) FROM laws) AS laws, (SELECT count(*) FROM chunks) AS chunks",
+                           url=url)
+        row["laws"] += extra["laws"]
+        row["chunks"] += extra["chunks"]
+    return row
 
 
 async def save_feedback(user_id: int, good: bool) -> None:

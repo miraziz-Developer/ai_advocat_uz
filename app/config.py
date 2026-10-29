@@ -19,6 +19,7 @@ _env = os.environ.get
 
 BOT_TOKEN = _env("BOT_TOKEN", "")
 DATABASE_URL = _env("DATABASE_URL", "")
+DATABASE_URL_REGS = _env("DATABASE_URL_REGS", "")  # optional 2nd free DB for VMQ/PQ/ministry acts
 GEMINI_API_KEY = _env("GEMINI_API_KEY", "")
 
 # Tried in order; next model when one is overloaded (503) or rate-limited (429). Lite models go first:

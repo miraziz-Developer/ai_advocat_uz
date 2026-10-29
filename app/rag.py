@@ -116,10 +116,14 @@ def short_title(title: str) -> str:
     return re.sub(r"^.*?\d{2}\.\d{2}\.\d{4}\.\s*", "", title)
 
 
-def display_title(title: str) -> str:
-    """"...O'zbekiston Respublikasining Mehnat kodeksi" -> "Mehnat kodeksi" for compact source links."""
+def display_title(title: str, kind: str = "law") -> str:
+    """"...O'zbekiston Respublikasining Mehnat kodeksi" -> "Mehnat kodeksi" for compact source links;
+    regulations keep their number ("... (VMQ-172-son)") so the user can tell a decree from a law."""
     t = re.sub(r"^O'zbekiston Respublikasi(ning)?\s+", "", short_title(title))
-    if t.endswith("to'g'risida"):  # "Iste'molchilarning ... to'g'risida" is a law, not a code
+    if kind != "law":
+        number = re.match(r"^\s*(\S+-son)\b", title)
+        t = f"{t} ({number.group(1)})" if number else t
+    elif t.endswith("to'g'risida"):  # "Iste'molchilarning ... to'g'risida" is a law, not a code
         t += "gi qonun"
     return t[:1].upper() + t[1:]
 
@@ -134,17 +138,25 @@ ROUTE_SCHEMA = {
     },
     "required": ["laws", "terms"],
 }
-_catalog: tuple[float, dict[int, str], str] = (0.0, {}, "")
+_catalog: tuple[float, dict[int, str], str, dict[int, str]] = (0.0, {}, "", {})
 
 
 async def law_catalog() -> tuple[dict[int, str], str]:
-    """All laws in the DB as 'id | name' lines — the AI's table of contents. Cached for an hour."""
+    """All laws in the DB as 'id | name' lines — the AI's table of contents (laws only: thousands of
+    regulation titles would not fit a prompt; those are found by name/topic/keywords). Cached for an hour."""
     global _catalog
     if time.monotonic() - _catalog[0] > 3600:
-        names = {r["doc_id"]: short_title(r["title"])[:90] for r in await db.law_catalog()  # shorter list = faster
-                 if not _CEREMONIAL.search(r["title"])}
-        _catalog = (time.monotonic(), names, "\n".join(f"{i} | {n}" for i, n in names.items()))
+        rows = [r for r in await db.law_catalog() if not _CEREMONIAL.search(r["title"])]
+        names = {r["doc_id"]: short_title(r["title"])[:90] for r in rows if r["kind"] == "law"}  # shorter = faster
+        everything = {r["doc_id"]: short_title(r["title"])[:200] for r in rows}
+        _catalog = (time.monotonic(), names, "\n".join(f"{i} | {n}" for i, n in names.items()), everything)
     return _catalog[1], _catalog[2]
+
+
+async def all_doc_names() -> dict[int, str]:
+    """Laws and regulations — for matching by name and the topic map."""
+    await law_catalog()
+    return _catalog[3]
 
 
 _CEREMONIAL = re.compile(r"tasdiqlash to.g.risida|kunini belgilash|kuni to.g.risida|amalga kiritish tartibi", re.I)
@@ -162,8 +174,14 @@ TOPICS = [
      "ijara shartnomasi ijaraga beruvchi ijarachi"),
     (r"ogirla|ogri|firib|urdi|urishdi|kaltak|pora|qamal|jinoyat|tan jarohat", ["ozbekiston respublikasining jinoyat kodeksi"],
      "jinoyat jazo ozodlikdan mahrum qilish jarima"),
-    (r"jarima|yhxx|gai|inspektor|haydovchilik|prava|mast holda|svetofor|tezlik", ["mamuriy javobgarlik", "yol harakati togrisida"],
-     "haydovchi transport vositasi yol harakati jarima"),
+    (r"jarima|yhxx|gai|inspektor|haydovchilik|prava|mast holda|svetofor|tezlik|radar|kamera|qizil chiroq|"
+     r"mashina|avtomobil|piyoda|parkovka|toxtash joy", ["yol harakati qoidalari", "mamuriy javobgarlik", "yol harakati togrisida"],
+     "haydovchi transport vositasi yol harakati jarima tezlik"),
+    (r"propiska|registratsiya|royxatga tur|yashash joyi|vaqtincha royxat|doimiy royxat",
+     ["royxatga olish", "yashash joyi boyicha"], "yashash joyi royxatga olish doimiy vaqtincha"),
+    (r"kommunal|svet|elektr|gaz puli|tabiiy gaz|suv puli|issiq suv|hisoblagich|schetchik|isitish",
+     ["kommunal xizmat", "elektr energiyasidan foydalanish", "tabiiy gazdan foydalanish"],
+     "kommunal xizmat isteʼmolchi hisoblagich tolov"),
     (r"kredit|qarz|bank|mikroqarz|nasiya|foiz", ["istemol krediti", "fuqarolik kodeksi (birinchi"], "kredit qarz foiz"),
     (r"ipoteka|garov", ["ipoteka togrisida", "garov togrisida"], "ipoteka garov"),
     (r"dokon|sifatsiz|kafolat|tovar|qaytarib olish|xarid|sotib oldim|buzildi|almashtir", ["istemolchilarning huquqlarini"],
@@ -205,10 +223,11 @@ async def search_query(user_id: int, text: str) -> tuple[str, list[int]]:
     turns everyday wording / follow-ups into legal search terms. Returns (terms, doc_ids)."""
     global _route_paused_until
     names, catalog = await law_catalog()
-    topic_ids, topic_terms = topic_laws(text, names)
+    everything = await all_doc_names()
+    topic_ids, topic_terms = topic_laws(text, everything)
     if time.monotonic() < _route_paused_until:  # models overloaded a moment ago: answer fast from the topic map
         q = normalize(f"{text} {topic_terms}")
-        return q, topic_ids + [i for i in title_matches(q, names) if i not in topic_ids][:2]
+        return q, topic_ids + [i for i in title_matches(q, everything) if i not in topic_ids][:2]
     rows = await db.history(user_id, limit=4)
     convo = "\n".join(f"{r['role']}: {r['content'][:600]}" for r in rows)
     prompt = (f"O'zbekistonning amaldagi qonunlari va kodekslari (ID | nomi):\n{catalog}\n\n"
@@ -225,11 +244,11 @@ async def search_query(user_id: int, text: str) -> tuple[str, list[int]]:
         _route_paused_until = time.monotonic() + 300
         log.warning("law routing failed (%s); using the topic map for 5 min", type(exc).__name__)
         q = normalize(f"{text} {topic_terms}")
-        return q, topic_ids + [i for i in title_matches(q, names) if i not in topic_ids][:2]
+        return q, topic_ids + [i for i in title_matches(q, everything) if i not in topic_ids][:2]
     terms = normalize(f"{plan.get('terms') or text} {topic_terms}")
     doc_ids = [i for i in plan.get("laws", []) if i in names][:4]  # model output: keep only real law ids
     doc_ids += [i for i in topic_ids if i not in doc_ids]
-    return terms, doc_ids + [i for i in title_matches(terms, names) if i not in doc_ids][:2]
+    return terms, doc_ids + [i for i in title_matches(terms, everything) if i not in doc_ids][:2]
 
 
 _GENERIC = {"huquqi", "huquql", "qonunc", "fuqaro", "davlat", "himoya", "javobg", "majbur", "tartib", "shartn",
@@ -305,7 +324,7 @@ def finalize(raw: str, rows) -> Reply:
             r = rows[n - 1]
             url = f"{r['url']}#{r['anchor']}" if r["anchor"] else r["url"]
             article = r["article"].split(".")[0]  # "333-modda"
-            name = html.escape(f"{display_title(r['title'])}, {article}", quote=False)
+            name = html.escape(f"{display_title(r['title'], r.get('kind') or 'law')}, {article}", quote=False)
             links.append(f'[{n}] <a href="{html.escape(url)}">{name}</a>')
         text += "\n\n<b>📚 Manbalar (lex.uz)</b>\n" + "\n".join(links)
     offer = offer_match.group(1).strip()[:300] if offer_match else None

@@ -16,6 +16,8 @@ services:
         sync: false
       - key: DATABASE_URL
         sync: false
+      - key: DATABASE_URL_REGS  # optional second free Neon DB for regulations
+        sync: false
       - key: GEMINI_API_KEY
         sync: false
       - key: ADMIN_IDS

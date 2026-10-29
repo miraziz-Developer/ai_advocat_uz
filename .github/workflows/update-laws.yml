@@ -15,7 +15,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt
-      - run: python -m app.ingest --all
+      - run: python -m app.ingest --all $( [ "$(date +%u)" = 1 ] && echo --regs )  # regulations weekly (Mon)
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_URL_REGS: ${{ secrets.DATABASE_URL_REGS }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
