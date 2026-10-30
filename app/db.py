@@ -398,6 +398,21 @@ async def stats() -> dict:
     return row
 
 
+async def recent_users(limit: int) -> list[asyncpg.Record]:
+    return await _run("fetch", """
+        SELECT u.id, u.created_at,
+               (SELECT count(*) FROM messages m WHERE m.user_id = u.id AND m.role = 'user') AS questions
+        FROM users u ORDER BY u.created_at DESC LIMIT $1""", limit)
+
+
+async def user_counts() -> asyncpg.Record:
+    return await _run("fetchrow", """
+        SELECT (SELECT count(*) FROM users) AS total,
+               (SELECT count(*) FROM users WHERE created_at > now() - interval '24 hours') AS new_24h,
+               (SELECT count(DISTINCT user_id) FROM messages
+                 WHERE role = 'user' AND created_at > now() - interval '24 hours') AS active_24h""")
+
+
 async def save_feedback(user_id: int, good: bool) -> None:
     """Stores the rating with the user's latest question/answer pair, so bad answers can be reviewed."""
     await _run("execute", """

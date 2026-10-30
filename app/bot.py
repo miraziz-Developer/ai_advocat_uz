@@ -1,5 +1,6 @@
 """Telegram handlers: menu, legal chat, document analysis, paid document drafting, receipt payments."""
 import asyncio
+import datetime as dt
 import hashlib
 import html
 import os
@@ -386,6 +387,32 @@ async def stats(message: Message) -> None:
                          f"💰 To'lovlar: {s['paid']} ta, {s['revenue']:,} so'm\n".replace(",", " ")
                          + f"👍 {s['good']}  👎 {s['bad']}\n"
                          + f"🔖 Versiya: {os.environ.get('RENDER_GIT_COMMIT', 'local')[:7]}")
+
+
+TASHKENT = dt.timezone(dt.timedelta(hours=5))
+
+
+@router.message(Command("users"), F.from_user.id.in_(config.ADMIN_IDS))
+async def users(message: Message, bot: Bot) -> None:
+    rows = await db.recent_users(30)
+    counts = await db.user_counts()
+    sem = asyncio.Semaphore(5)
+
+    async def name(user_id: int) -> str:
+        async with sem:  # names come from Telegram; a slow or failing lookup must not hold up the list
+            try:
+                chat = await asyncio.wait_for(bot.get_chat(user_id), 5)
+            except Exception:
+                return "—"
+            full = " ".join(x for x in (chat.first_name, chat.last_name) if x) or "—"
+            return f"{full} (@{chat.username})" if chat.username else full
+
+    names = await asyncio.gather(*(name(r["id"]) for r in rows))
+    lines = [f"👥 Jami: {counts['total']}  |  24 soatda yangi: +{counts['new_24h']}  |  24 soatda faol: {counts['active_24h']}",
+             f"Oxirgi {len(rows)} ta foydalanuvchi:", ""]
+    for r, n in zip(rows, names, strict=True):
+        lines.append(f"{r['created_at'].astimezone(TASHKENT):%d.%m %H:%M} — {n} — {r['questions']} ta savol (id {r['id']})")
+    await send_long(message, "\n".join(lines))
 
 
 @router.message(Command("bad"), F.from_user.id.in_(config.ADMIN_IDS))

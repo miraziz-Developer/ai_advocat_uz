@@ -36,7 +36,8 @@ yengil shikast yetkazish") va asosiy xulosa.
   ANIQ raqami bilan yoz (masalan: "BHMning 25 baravarigacha jarima yoki 1 yilgacha axloq tuzatish ishlari").
 
 **✅ Nima qilish kerak**
-1. aniq qadam (qayerga, nima bilan, qachongacha)
+1. aniq qadam (qayerga, nima bilan, qachongacha). Eng tez qonuniy yo'lni birinchi yoz; manbalarda boshqa
+   yo'l ham bo'lsa (masalan: qarzni o'zi to'lab taqiqni yechish, bo'lib to'lash, kechiktirish) — uni ham ayt
 2. ...
 (ko'pi bilan 4 qadam; kerak bo'lsa bitta qadam — qaysi dalillarni yig'ish: chek, guvoh, tibbiy ma'lumotnoma,
 yozishma, video)
@@ -203,7 +204,9 @@ TOPICS = [
     (r"zoravon|kaltakla|tazyiq|himoya order", ["xotin-qizlarni tazyiq"], "zoravonlik himoya order"),
     (r"advokat", ["advokatura togrisida"], "advokat yuridik yordam"),
     (r"shikoyat|murojaat|hokimiyat|byurokrat|javob bermay", ["jismoniy va yuridik shaxslarning murojaatlari"], "murojaat korib chiqish"),
-    (r"sud qarori|ijrochi|mib|ijro varaq", ["sud hujjatlari va boshqa organlar"], "ijro hujjati ijrochi"),
+    (r"sud qarori|ijrochi|\bmib|majburiy ijro|ijro varaq|taqiq|chet elga chiq|chiqa olmay|xatla|qarzdor|undiruv",
+     ["sud hujjatlari va boshqa organlar hujjatlarini ijro etish togrisida", "chiqishini vaqtincha cheklash"],
+     "qarzdor chiqishini vaqtincha cheklash cheklashni olib tashlash ixtiyoriy ijro bolib-bolib ijro kechiktirish"),
     (r"yer uchast|tomorqa|yer maydon", ["ozbekiston respublikasining yer kodeksi"], "yer uchastkasi"),
     (r"sugurta|osago", ["sugurta togrisida"], "sugurta"),
     (r"nogiron", ["nogironligi bolgan shaxslarning"], "nogironlik"),

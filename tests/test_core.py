@@ -141,3 +141,12 @@ def test_is_normative():
     assert not lexuz.is_normative("4-1203-2301/1131-sonli ish")
     assert not lexuz.is_normative("Kommunal xizmatlar nizomiga o'zgartirishlar kiritish to'g'risida")
     assert not lexuz.is_normative("«Inson faxri» milliy mukofotini ta'sis etish to'g'risida")
+
+
+def test_mib_topic():
+    names = {1: "Sud hujjatlari va boshqa organlar hujjatlarini ijro etish to'g'risida",
+             2: "Qarzdorning chiqishini vaqtincha cheklash tartibi", 3: "O'zbekiston Respublikasining Mehnat kodeksi"}
+    ids, terms = rag.topic_laws("MIB menga taqiq qo'yib qo'ydi, qanday chiqsam bo'ladi", names)
+    assert ids == [1, 2] and "cheklash" in terms
+    assert rag.topic_laws("Mibdan qanday chiqaman", names)[0] == [1, 2]  # "MIBdan", "MIBga" are how people write it
+    assert rag.topic_laws("Kombinatsiya", names)[0] == []  # but not inside other words

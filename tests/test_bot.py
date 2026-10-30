@@ -192,3 +192,8 @@ async def test_feedback_saved_and_buttons_removed(env):
     assert env.db.feedback == [True]
     edits = [m for m in env.session.sent if type(m).__name__ == "EditMessageReplyMarkup"]
     assert edits and edits[-1].reply_markup is None
+
+
+async def test_users_command_is_admin_only(env):
+    await send(env, "/users")
+    assert "Noma'lum buyruq" in env.session.texts()[-1]

@@ -76,6 +76,7 @@ qo'shing va `python -m app.ingest` buyrug'ini ishga tushiring. Ruscha versiyanin
 ## Admin buyruqlari
 * `/stats`: foydalanuvchilar, bazadagi qonunlar va to'lovlar soni.
 * `/credit <user_id> <soni>`: kredit qo'shish yoki ayirish (manfiy son bilan ayiriladi).
+* `/users`: oxirgi 30 foydalanuvchi (ism, @username, nechta savol) va 24 soatlik statistika.
 * `/bad`: foydalanuvchilar 👎 bergan oxirgi javoblar (savol va javob bilan).
 * Botda xato bo'lsa yoki 👎 bosilsa, adminga avtomatik xabar keladi (10 daqiqada ko'pi bilan 1 ta).
 
