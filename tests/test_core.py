@@ -150,3 +150,10 @@ def test_mib_topic():
     assert ids == [1, 2] and "cheklash" in terms
     assert rag.topic_laws("Mibdan qanday chiqaman", names)[0] == [1, 2]  # "MIBdan", "MIBga" are how people write it
     assert rag.topic_laws("Kombinatsiya", names)[0] == []  # but not inside other words
+
+
+def test_cited_articles():
+    assert rag.cited("Mehnat kodeksidagi 454-moddani qanday qo'llayman") == [("454", [6257288])]
+    assert rag.cited("Jinoyat-protsessual kodeksi 100 modda") == [("100", [111460])]
+    assert rag.cited("Fuqarolik kodeksi 551-modda va 382-modda") == [("551", [111189, 180552]), ("382", [111189, 180552])]
+    assert rag.cited("454-modda nima?") == []  # no code named: ambiguous

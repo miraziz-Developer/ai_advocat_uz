@@ -258,6 +258,15 @@ async def search(query_embedding: list[float] | None, query_text: str, limit: in
     return sorted((r for rows in results for r in rows), key=lambda r: r["score"], reverse=True)[:limit]
 
 
+async def article_rows(number: str, doc_ids: list[int]) -> list:
+    """The exact article a user cited ("Mehnat kodeksi 454-modda"), whatever database it lives in."""
+    return (await _each("fetch", """
+        SELECT c.article, c.heading, c.anchor, c.body, l.title, l.url, l.kind, 1.0 AS score
+        FROM chunks c JOIN laws l USING (doc_id)
+        WHERE c.doc_id = ANY($2::bigint[]) AND c.article LIKE $1 || '-modda%'
+        ORDER BY c.id LIMIT 2""", number, doc_ids))[:2]
+
+
 async def law_catalog() -> list[asyncpg.Record]:
     return sorted(await _each("fetch", "SELECT doc_id, title, kind FROM laws"), key=lambda r: r["doc_id"])
 

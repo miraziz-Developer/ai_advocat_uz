@@ -55,7 +55,9 @@ bitta eng muhim ogohlantirish (muddat, xavf).
    ishonchnoma, apellyatsiya va h.k.) kerak bo'lsa, javobning eng oxirida alohida qatorda aynan shunday yoz:
    [[HUJJAT: hujjat turi va kimga/nima haqida]]
    Hujjat kerak bo'lmasa, bu belgini qo'yma.
-10. Qonunni chetlab o'tish, firibgarlik yoki hujjat soxtalashtirishga yordam berma."""
+10. Foydalanuvchi aniq moddani tilga olsa va u manbalarda bo'lsa, avval u modda aslida nima haqida ekanini
+   bir gapda ayt. Vaziyatiga taalluqli bo'lmasa, buni ochiq ayt va to'g'ri normalarni ko'rsat.
+11. Qonunni chetlab o'tish, firibgarlik yoki hujjat soxtalashtirishga yordam berma."""
 
 FILE_SYSTEM = SYSTEM + """
 
@@ -349,8 +351,31 @@ def finalize(raw: str, rows) -> Reply:
     return Reply(text, offer, plain_md.replace("**", ""))
 
 
+CODE_DOCS = {  # code names people write -> lex.uz doc ids
+    "mehnat": [6257288], "jinoyat-protsessual": [111460], "jinoyat": [111453], "fuqarolik protsessual": [3517337],
+    "fuqarolik": [111189, 180552], "mamuriy": [97664], "oila": [104720], "soliq": [4674902], "uy-joy": [106136],
+    "uy joy": [106136], "konstitutsiya": [6445145], "yer kodeks": [152653], "bojxona": [2876354],
+}
+_ART = re.compile(r"(\d{1,4})\s*[-–]?\s*modda")
+
+
+def cited(text: str) -> list[tuple[str, list[int]]]:
+    """'Mehnat kodeksidagi 454-moddani' -> [('454', [6257288])]. Only when the code is named: a bare number is ambiguous."""
+    low = normalize(text).lower().replace("'", "")
+    docs: list[int] = []
+    for key, ids in CODE_DOCS.items():
+        if key in low:
+            docs += [i for i in ids if i not in docs]
+            low = low.replace(key, " ")  # "jinoyat-protsessual" must not also count as "jinoyat"
+    return [(n, docs) for n in dict.fromkeys(_ART.findall(normalize(text).lower()))][:3] if docs else []
+
+
 async def answer(user_id: int, text: str) -> Reply:
     rows = await retrieve(*await search_query(user_id, text))
+    exact = [r for n, docs in cited(text) for r in await db.article_rows(n, docs)]
+    if exact:  # the article the user named goes first, so the answer can say what it really covers
+        seen = {(r["url"], r["article"]) for r in exact}
+        rows = (exact + [r for r in rows if (r["url"], r["article"]) not in seen])[:8]
     history = await db.history(user_id)
     contents = llm.history_contents(history, [llm.types.Part(text=f"{sources_block(rows)}\n\nSAVOL: {text}")])
     raw = await llm.generate(contents, SYSTEM.format(today=_today()))
