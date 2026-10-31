@@ -9,7 +9,7 @@ from aiogram.types import BotCommand
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
 
-from app import config, db
+from app import config, db, rag
 from app.bot import router
 
 log = logging.getLogger("main")
@@ -77,6 +77,7 @@ def main() -> None:
         await bot.set_webhook(f"{base}{WEBHOOK_PATH}", secret_token=config.WEBHOOK_SECRET,
                               allowed_updates=dp.resolve_used_update_types())
         tasks.append(asyncio.create_task(keep_awake(base)))
+        tasks.append(asyncio.create_task(rag.law_catalog()))  # first question must not wait for it
 
     dp.startup.register(on_startup)
     app = web.Application()

@@ -165,3 +165,55 @@ def test_garbled():
     assert not rag.garbled("jarima", "Ma'muriy javobgarlik, chek, BHMning 2 baravari [1].")
     assert not rag.garbled("Штраф за скорость", "Штраф до 5 БРВ [1].")
     assert rag.garbled("Штраф", "Штрaф")  # Latin 'a' inside a Cyrillic word
+
+
+def test_ungrounded_articles():
+    sources = "[1] Mehnat kodeksi — 333-modda. Ish haqi\n... ushbu Kodeksning 32-moddasida ..."
+    assert rag.ungrounded("Bu MK 333-moddasi [1], 32-moddaga ko'ra", sources) == []
+    assert rag.ungrounded("MJtK 128³-moddasi bo'yicha jarima", sources) == ["128³"]
+    assert rag.ungrounded("454-modda qo'llanmaydi", sources + "\nSAVOL: 454-moddani qanday qo'llayman") == []
+
+
+def test_merge_fixes_takes_only_spelling_edits():
+    raw = "1. Zararni qismman to'lang [2].\n2. Ish beruvchining aybi bor-yo'q tejidan qat'i nazar.\nMulk bo'sh qoladi, 49-modda."
+    fixed = ("1. Zararni qisman to'lang [3].\n2. Ish beruvchining aybi bor-yo'qligidan qat'i nazar.\n"
+             "Mulk huquqiga ega qoladi, 50-modda.")
+    assert rag.merge_fixes(raw, fixed) == ("1. Zararni qisman to'lang [2].\n2. Ish beruvchining aybi bor-yo'qligidan "
+                                           "qat'i nazar.\nMulk bo'sh qoladi, 49-modda.")
+    assert rag.merge_fixes(raw, raw) == raw
+
+
+def test_language_note():
+    assert "русском" in rag.language_note("Меня уволили без предупреждения, что делать?")
+    assert rag.language_note("Отам вафот этди, уй кимга қолади? Что делать") == ""  # Uzbek Cyrillic
+    assert rag.problems("Что делать?", "Huquqiy baho [1]", "") == ["answered a Russian question in Uzbek"]
+    assert rag.language_note("Oyligimni bermayapti") == ""
+
+
+def test_topics_understand_russian():
+    names = {2: "O'zbekiston Respublikasining Mehnat kodeksi", 3: "O'zbekiston Respublikasining Oila kodeksi",
+             5: "Fuqarolik kodeksi (ikkinchi qism)"}
+    ids, terms = rag.topic_laws("Меня уволили без предупреждения, что делать?", names)
+    assert ids == [2] and "ishga tiklash" in terms
+    assert rag.topic_laws("Муж не платит алименты", names)[0] == [3]
+    assert rag.topic_laws("Отец умер, кому достанется наследство?", names)[0] == [5]
+    jk = {7: "O'zbekiston Respublikasining Jinoyat kodeksi"}
+    assert rag.topic_laws("Yo'l politsiyasi tezlik uchun jarima yozdi", jk)[0] == []  # not a crime
+    assert rag.topic_laws("Meni o'g'irlikda nohaq ayblashyapti", jk)[0] == [7]
+    assert rag.topic_laws("Shum bolam maktabga bormayapti", {1: "Aholini shovqinning zararli ta'siridan"})[0] == []
+
+
+async def test_failed_regeneration_keeps_first_answer(monkeypatch):
+    calls = []
+
+    async def generate(contents, system, models=None, temperature=0.2, timeout=25):
+        calls.append(models)
+        if models is None:
+            return "Javob belgilanши [1]"  # garbled -> triggers a retry
+        if models == rag.config.LITE_MODELS:
+            return contents[0]  # proofreader changes nothing
+        raise RuntimeError("503")
+
+    monkeypatch.setattr(rag.llm, "generate", generate)
+    assert await rag.generate_clean([], "sys", "savol", "") == "Javob belgilanши [1]"
+    assert len(calls) == 3

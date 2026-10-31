@@ -6,6 +6,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 
 from app import config, db, llm
 from app.translit import normalize
@@ -149,17 +150,34 @@ ROUTE_SCHEMA = {
 _catalog: tuple[float, dict[int, str], str, dict[int, str]] = (0.0, {}, "", {})
 
 
-async def law_catalog() -> tuple[dict[int, str], str]:
-    """All laws in the DB as 'id | name' lines — the AI's table of contents (laws only: thousands of
-    regulation titles would not fit a prompt; those are found by name/topic/keywords). Cached for an hour."""
+async def _load_catalog() -> None:
     global _catalog
-    if time.monotonic() - _catalog[0] > 3600:
+    try:
         # "...kodeksini tasdiqlash" laws are one-article formalities; for regulations "...qoidalarini tasdiqlash"
         # IS the rulebook (traffic rules, VMQ-172), so the filter applies to laws only
         rows = [r for r in await db.law_catalog() if r["kind"] != "law" or not _CEREMONIAL.search(r["title"])]
-        names = {r["doc_id"]: short_title(r["title"])[:90] for r in rows if r["kind"] == "law"}  # shorter = faster
-        everything = {r["doc_id"]: short_title(r["title"])[:200] for r in rows}
-        _catalog = (time.monotonic(), names, "\n".join(f"{i} | {n}" for i, n in names.items()), everything)
+    except Exception:
+        if not _catalog[1]:
+            raise
+        log.exception("law catalog refresh failed, keeping the old one")
+        return
+    names = {r["doc_id"]: short_title(r["title"])[:90] for r in rows if r["kind"] == "law"}  # shorter = faster
+    everything = {r["doc_id"]: short_title(r["title"])[:200] for r in rows}
+    _catalog = (time.monotonic(), names, "\n".join(f"{i} | {n}" for i, n in names.items()), everything)
+
+
+_catalog_refresh: asyncio.Task | None = None
+
+
+async def law_catalog() -> tuple[dict[int, str], str]:
+    """All laws in the DB as 'id | name' lines — the AI's table of contents (laws only: thousands of
+    regulation titles would not fit a prompt; those are found by name/topic/keywords). Loaded at startup;
+    after an hour it is reloaded in the background, so no user waits for the ~6k-row query."""
+    global _catalog_refresh
+    if not _catalog[1]:
+        await _load_catalog()
+    elif time.monotonic() - _catalog[0] > 3600 and (_catalog_refresh is None or _catalog_refresh.done()):
+        _catalog_refresh = asyncio.create_task(_load_catalog())
     return _catalog[1], _catalog[2]
 
 
@@ -174,23 +192,34 @@ _CEREMONIAL = re.compile(r"tasdiqlash to.g.risida|kunini belgilash|kuni to.g.ris
 # Everyday situations -> (title fragments of the laws that govern them, extra search terms). Works without AI,
 # so answers stay on the right law even when free-tier models are overloaded. Matched without apostrophes.
 TOPICS = [
-    (r"musiqa|shovqin|baland ovoz|tinchlik bermay|uxlay olmay", ["aholini shovqinning", "mamuriy javobgarlik"],
+    (r"musiqa|shovqin|baland ovoz|tinchlik bermay|uxlay olmay|\bshum\b(?! bola)|shumn|shumya|shumit|sosed",
+     ["aholini shovqinning", "mamuriy javobgarlik"],
      "shovqin osoyishtalik tungi vaqt maishiy shovqin"),
-    (r"ish haq|oylik|oylig|maosh|ishdan bo.?shat|ishdan haydash|tatil|mehnat shartnoma|ish beruvchi|ishxona|ishga ol",
+    (r"ishdan bo.?shat|ishdan haydash|ishdan chiqar|uvol|sokrash",
+     ["ozbekiston respublikasining mehnat kodeksi"],
+     "mehnat shartnomasini bekor qilish ish beruvchining tashabbusi ogohlantirish ishga tiklash majburiy progul"),
+    (r"ish haq|oylik|oylig|maosh|ishdan bo.?shat|ishdan haydash|tatil|mehnat shartnoma|ish beruvchi|ishxona|ishga ol|"
+     r"zarplat|uvol|rabot|otpusk",
      ["ozbekiston respublikasining mehnat kodeksi"], "ish haqini tolash muddatlari kechiktirganlik ish beruvchining javobgarligi"),
-    (r"ajrash|aliment|nikoh|erim|xotinim|farzand|vasiylik", ["ozbekiston respublikasining oila kodeksi"],
+    (r"ajrash|aliment|nikoh|erim|xotinim|farzand|vasiylik|razvod|rebenk|rebyon|detey", ["ozbekiston respublikasining oila kodeksi"],
      "nikoh aliment bola ota-ona"),
-    (r"ijara|ijarachi|kvartira|uy egasi|kvartirant", ["fuqarolik kodeksi (ikkinchi", "ozbekiston respublikasining uy-joy kodeksi"],
+    (r"ijara|ijarachi|kvartira|"
+     r"uy egasi|kvartirant|arend|hozyain",
+     ["fuqarolik kodeksi (ikkinchi", "ozbekiston respublikasining uy-joy kodeksi"],
      "ijara shartnomasi ijaraga beruvchi ijarachi"),
     # "o'g'irlab" is spelt differently from "o'g'rilik", so each crime carries its legal term
-    (r"ogirla|ogri|ugirla", ["ozbekiston respublikasining jinoyat kodeksi"], "ogrilik"),
-    (r"firib|aldab|aldash|aldov|aldadi|pulimni olib|kartamdan", ["ozbekiston respublikasining jinoyat kodeksi"], "firibgarlik"),
-    (r"urdi|urishdi|kaltak|tan jarohat|jarohat|dopposla",
+    (r"ogirl|ogri|ugirl|ukral|kraj", ["ozbekiston respublikasining jinoyat kodeksi"], "ogrilik"),
+    (r"firib|aldab|aldash|aldov|"
+     r"aldadi|pulimni olib|kartamdan|moshen|obman",
+     ["ozbekiston respublikasining jinoyat kodeksi"], "firibgarlik"),
+    (r"urdi|urishdi|kaltak|tan jarohat|jarohat|dopposla|izbi|pobo",
      ["ozbekiston respublikasining jinoyat kodeksi", "mamuriy javobgarlik togrisidagi kodeksi"], "qasddan badanga yengil shikast"),
-    (r"pora|qamal|jinoyat|tergov|ushlab olishdi|hibs", ["ozbekiston respublikasining jinoyat kodeksi", "jinoyat-protsessual"],
+    (r"pora|qamal|jinoyat|tergov|ushlab olishdi|hibs|"
+     r"zaderj|arest|sledovat|ugolovn",
+     ["ozbekiston respublikasining jinoyat kodeksi", "jinoyat-protsessual"],
      "jinoyat jazo ushlab turish"),
     (r"jarima|yhxx|gai|inspektor|haydovchilik|prava|mast holda|svetofor|tezlik|radar|kamera|qizil chiroq|"
-     r"mashina|avtomobil|piyoda|parkovka|toxtash joy",
+     r"mashina|avtomobil|piyoda|parkovka|toxtash joy|shtraf|gibdd|dps|skorost|voditel",
      ["yol harakati qoidalarini tasdiqlash", "mamuriy javobgarlik togrisidagi kodeksi", "yol harakati togrisida"],
      "haydovchi transport vositasi yol harakati jarima tezlik"),
     (r"propiska|registratsiya|royxatga tur|yashash joyi|vaqtincha royxat|doimiy royxat",
@@ -199,23 +228,28 @@ TOPICS = [
      ["elektr energiyasini yetkazib berish tartibi", "elektr va issiqlik energiyasidan foydalanish qoidalari",
       "hisobga olish uskunala", "tabiiy gaz bilan limitsiz", "suv taminoti va suvoqava kommunal tizimidan foydalanish"],
      "kommunal xizmat isteʼmolchi hisoblagich tolov"),
-    (r"kredit|qarz|bank|mikroqarz|nasiya|foiz", ["istemol krediti", "fuqarolik kodeksi (birinchi"], "kredit qarz foiz"),
+    (r"kredit|qarz|bank|mikroqarz|nasiya|foiz|dolg|zaym", ["istemol krediti", "fuqarolik kodeksi (birinchi"], "kredit qarz foiz"),
     (r"ipoteka|garov", ["ipoteka togrisida", "garov togrisida"], "ipoteka garov"),
-    (r"dokon|sifatsiz|kafolat|tovar|qaytarib olish|xarid|sotib oldim|buzildi|almashtir", ["istemolchilarning huquqlarini"],
+    (r"dokon|sifatsiz|kafolat|tovar|qaytarib olish|xarid|"
+     r"sotib oldim|buzildi|almashtir|magazin|vozvrat|garanti",
+     ["istemolchilarning huquqlarini"],
      "istemolchi tovar sifat kafolat sotuvchi"),
-    (r"notarius|ishonchnoma|vasiyat|meros", ["notariat togrisida", "fuqarolik kodeksi (ikkinchi"], "meros vasiyatnoma notarial"),
+    (r"notarius|ishonchnoma|vasiyat|"
+     r"meros|nasled|zaveshan",
+     ["notariat togrisida", "fuqarolik kodeksi (ikkinchi"], "meros vasiyatnoma notarial"),
     (r"pensiya|nafaqa", ["davlat pensiya taminoti"], "pensiya tayinlash"),
     (r"maktab|oqish|universitet|kontrakt|oqituvchi|talaba", ["talim togrisida"], "talim oquvchi talaba"),
     (r"bogcha", ["maktabgacha talim"], "maktabgacha talim"),
-    (r"soliq|yatt|tadbirkor|biznes|patent", ["ozbekiston respublikasining soliq kodeksi"], "soliq soliq tolovchi"),
+    (r"soliq|yatt|tadbirkor|biznes|patent|nalog", ["ozbekiston respublikasining soliq kodeksi"], "soliq soliq tolovchi"),
     (r"zoravon|kaltakla|tazyiq|himoya order", ["xotin-qizlarni tazyiq"], "zoravonlik himoya order"),
     (r"advokat", ["advokatura togrisida"], "advokat yuridik yordam"),
     (r"shikoyat|murojaat|hokimiyat|byurokrat|javob bermay", ["jismoniy va yuridik shaxslarning murojaatlari"], "murojaat korib chiqish"),
-    (r"sud qarori|ijrochi|\bmib|majburiy ijro|ijro varaq|taqiq|chet elga chiq|chiqa olmay|xatla|qarzdor|undiruv",
+    (r"sud qarori|ijrochi|\bmib|majburiy ijro|ijro varaq|taqiq|chet elga chiq|chiqa olmay|xatla|qarzdor|undiruv|"
+     r"ispolnitel|zapret|doljnik",
      ["sud hujjatlari va boshqa organlar hujjatlarini ijro etish togrisida", "chiqishini vaqtincha cheklash"],
      "qarzdor chiqishini vaqtincha cheklash cheklashni olib tashlash ixtiyoriy ijro bolib-bolib ijro kechiktirish"),
     (r"yer uchast|tomorqa|yer maydon", ["ozbekiston respublikasining yer kodeksi"], "yer uchastkasi"),
-    (r"sugurta|osago", ["sugurta togrisida"], "sugurta"),
+    (r"sugurta|osago|strahov", ["sugurta togrisida"], "sugurta"),
     (r"nogiron", ["nogironligi bolgan shaxslarning"], "nogironlik"),
     (r"shaxsiy malumot|malumotlarimni|pasport.*tarqat", ["shaxsga doir"], "shaxsga doir malumotlar"),
 ]
@@ -387,12 +421,85 @@ def garbled(question: str, raw: str) -> bool:
     return bool(_NOT_UZ_LATIN.search(raw))
 
 
-async def generate_clean(contents, system: str, question: str) -> str:
-    raw = await llm.generate(contents, system, temperature=0)  # higher temperature garbles Uzbek words more often
-    if garbled(question, raw):
-        log.warning("garbled answer, regenerating with the next model")
-        raw = await llm.generate(contents, system, models=config.CHAT_MODELS[1:], temperature=0)
+_RUSSIAN = re.compile(r"[ыщ]|\b(что|как|меня|мне|можно|если|это|нет|почему|делать)\b", re.I)
+_UZ_CYRILLIC = re.compile(r"[ўқғҳ]", re.I)
+
+
+def is_russian(text: str) -> bool:
+    return bool(_RUSSIAN.search(text)) and not _UZ_CYRILLIC.search(text)
+
+
+_CITED_ART = re.compile(r"(\d{1,4}[¹²³⁴⁵⁶⁷⁸⁹⁰]*)\s*[-–]\s*(?:modd|модд)", re.I)
+
+
+def ungrounded(raw: str, grounding: str) -> list[str]:
+    """Article numbers the answer names that appear in neither the sources nor the user's text: invented."""
+    known = set(_CITED_ART.findall(grounding))
+    return [n for n in dict.fromkeys(_CITED_ART.findall(raw)) if n not in known]
+
+
+def problems(question: str, raw: str, grounding: str) -> list[str]:
+    found = ["garbled"] if garbled(question, raw) else []
+    if is_russian(question) and not _CYRILLIC.search(raw):
+        found.append("answered a Russian question in Uzbek")
+    if bad := ungrounded(raw, grounding):
+        found.append(f"invented articles {bad}")
+    return found
+
+
+PROOF_SYSTEM = """Sen muharrirsan. Matndagi FAQAT imlo xatolari va buzilgan so'zlarni tuzat, matn tilini o'zgartirma.
+Mazmun, raqamlar, [1] kabi belgilar, ** belgilar, emoji, qatorlar tartibi O'ZGARMASIN. Hech narsa qo'shma.
+Faqat tuzatilgan matnni qaytar."""
+
+
+def merge_fixes(raw: str, fixed: str) -> str:
+    """Takes from the proofread text only spelling-sized edits: similar words, same digits, within one line.
+    A proofreader that rewrites meaning ("bo'sh" -> "huquqiga ega") or a citation is ignored there."""
+    parts = re.split(r"(\s+)", raw)  # words at even indexes, separators at odd
+    words, new = parts[0::2], re.findall(r"\S+", fixed)
+    for tag, i1, i2, j1, j2 in reversed(SequenceMatcher(None, words, new, autojunk=False).get_opcodes()):
+        if tag != "replace":
+            continue
+        a, b = " ".join(words[i1:i2]), " ".join(new[j1:j2])
+        same_line = all("\n" not in parts[2 * k - 1] for k in range(i1 + 1, i2))
+        if (same_line and re.findall(r"[\d\[\]*]", a) == re.findall(r"[\d\[\]*]", b)
+                and abs(len(a) - len(b)) <= 6 and SequenceMatcher(None, a, b).ratio() >= 0.7):
+            parts[2 * i1] = b
+            for k in range(i1 + 1, i2):
+                parts[2 * k] = parts[2 * k - 1] = ""
+    return "".join(parts)
+
+
+async def proofread(raw: str) -> str:
+    try:
+        fixed = await asyncio.wait_for(  # overloaded models must not hold up a finished answer for long
+            llm.generate([raw], PROOF_SYSTEM, models=config.LITE_MODELS, temperature=0, timeout=8), 12)
+    except Exception as exc:  # a typo is better than no answer
+        log.warning("proofread failed (%s)", type(exc).__name__)
+        return raw
+    return merge_fixes(raw, fixed) if fixed else raw
+
+
+async def generate_clean(contents, system: str, question: str, grounding: str) -> str:
+    """grounding: the sources and the user's own text; any article number outside it was made up."""
+    # higher temperature garbles Uzbek words more often; the proofreader fixes most of the rest
+    raw = await proofread(await llm.generate(contents, system, temperature=0))
+    if found := problems(question, raw, grounding):
+        log.warning("bad answer (%s), regenerating with the next model", "; ".join(found))
+        try:
+            retry = await proofread(await llm.generate(contents, system, models=config.CHAT_MODELS[1:], temperature=0))
+        except Exception as exc:  # models overloaded: the first answer is still better than an error
+            log.warning("regeneration failed (%s), keeping the first answer", type(exc).__name__)
+            return raw
+        if len(problems(question, retry, grounding)) < len(found):
+            raw = retry
     return raw
+
+
+def language_note(text: str) -> str:
+    """Sources are all Uzbek Latin, so without a reminder the model answers Russian questions in Uzbek."""
+    return ("\n\nВАЖНО: вопрос задан на русском. Весь ответ, включая заголовки, пиши ТОЛЬКО на русском языке, "
+            "источники на узбекском переводи.") if is_russian(text) else ""
 
 
 async def answer(user_id: int, text: str) -> Reply:
@@ -402,8 +509,11 @@ async def answer(user_id: int, text: str) -> Reply:
         seen = {(r["url"], r["article"]) for r in exact}
         rows = (exact + [r for r in rows if (r["url"], r["article"]) not in seen])[:8]
     history = await db.history(user_id)
-    contents = llm.history_contents(history, [llm.types.Part(text=f"{sources_block(rows)}\n\nSAVOL: {text}")])
-    raw = await generate_clean(contents, SYSTEM.format(today=_today()), text)
+    note = language_note(text)
+    question = f"{note.strip()}\n\n{sources_block(rows)}\n\nSAVOL: {text}{note}"
+    contents = llm.history_contents(history, [llm.types.Part(text=question)])
+    raw = await generate_clean(contents, SYSTEM.format(today=_today()), text,
+                               "\n".join([sources_block(rows), text, *(h["content"] for h in history)]))
     reply = finalize(raw, rows)
     await db.add_message(user_id, "user", text)
     await db.add_message(user_id, "model", reply.plain)
@@ -424,7 +534,8 @@ async def analyze_file(user_id: int, parts: list, caption: str) -> Reply:
     user_turn = f"[Yuborilgan hujjat: {extracted.get('doc_type', 'hujjat')}]\n{doc_text}\n\nSAVOL: {question}"
     contents = llm.history_contents(await db.history(user_id, limit=4),
                                     [llm.types.Part(text=f"{sources_block(rows)}\n\n{user_turn}")])
-    raw = await generate_clean(contents, FILE_SYSTEM.format(today=_today()), question)
+    raw = await generate_clean(contents, FILE_SYSTEM.format(today=_today()), question,
+                               f"{sources_block(rows)}\n{user_turn}")
     reply = finalize(raw, rows)
     await db.add_message(user_id, "user", user_turn[:12000])  # keeps follow-up questions about the document working
     await db.add_message(user_id, "model", reply.plain)
