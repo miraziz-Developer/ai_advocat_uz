@@ -56,8 +56,13 @@ bitta eng muhim ogohlantirish (muddat, xavf).
    [[HUJJAT: hujjat turi va kimga/nima haqida]]
    Hujjat kerak bo'lmasa, bu belgini qo'yma.
 10. Foydalanuvchi aniq moddani tilga olsa va u manbalarda bo'lsa, avval u modda aslida nima haqida ekanini
-   bir gapda ayt. Vaziyatiga taalluqli bo'lmasa, buni ochiq ayt va to'g'ri normalarni ko'rsat.
-11. Qonunni chetlab o'tish, firibgarlik yoki hujjat soxtalashtirishga yordam berma."""
+   bir gapda ayt. Vaziyatiga taalluqli bo'lmasa, buni ochiq ayt va to'g'ri normalarni ko'rsat. Taalluqli
+   bo'lmagan moddani boshqa joyda (📌 yoki ✅ bo'limida) ISHLATMA va undan maslahat chiqarma.
+11. Qonunni chetlab o'tish, firibgarlik yoki hujjat soxtalashtirishga yordam berma.
+12. MUQOBIL YO'LLARNI TASHLAB KETMA: javob yozishdan oldin BARCHA manbalarni ko'rib chiq. Ularda foydalanuvchiga
+   yengillik beradigan norma bo'lsa (ijroni kechiktirish, bo'lib-bo'lib to'lash, kelishuv bitimi, ixtiyoriy
+   to'lab cheklovni yechish, shikoyat yoki apellyatsiya, imtiyoz) — uni ✅ bo'limida ALOHIDA qadam qilib,
+   kimga ariza berishini va manba raqamini ko'rsatib yoz. Bu foydalanuvchi uchun eng qimmatli ma'lumot."""
 
 FILE_SYSTEM = SYSTEM + """
 
@@ -370,6 +375,26 @@ def cited(text: str) -> list[tuple[str, list[int]]]:
     return [(n, docs) for n in dict.fromkeys(_ART.findall(normalize(text).lower()))][:3] if docs else []
 
 
+_CYRILLIC = re.compile(r"[а-яёқғҳў]", re.I)
+_MIXED = re.compile(r"[a-z][а-яёқғҳў]|[а-яёқғҳў][a-z]", re.I)
+_NOT_UZ_LATIN = re.compile(r"[а-яёқғҳўà-ÿ]|c(?!h)|w", re.I)
+
+
+def garbled(question: str, raw: str) -> bool:
+    """Free-tier models sometimes emit a broken token inside a word ("belgilanши", "conductoriga")."""
+    if _CYRILLIC.search(question):  # Cyrillic/Russian question: only words mixing both scripts are wrong
+        return bool(_MIXED.search(raw))
+    return bool(_NOT_UZ_LATIN.search(raw))
+
+
+async def generate_clean(contents, system: str, question: str) -> str:
+    raw = await llm.generate(contents, system, temperature=0)  # higher temperature garbles Uzbek words more often
+    if garbled(question, raw):
+        log.warning("garbled answer, regenerating with the next model")
+        raw = await llm.generate(contents, system, models=config.CHAT_MODELS[1:], temperature=0)
+    return raw
+
+
 async def answer(user_id: int, text: str) -> Reply:
     rows = await retrieve(*await search_query(user_id, text))
     exact = [r for n, docs in cited(text) for r in await db.article_rows(n, docs)]
@@ -378,7 +403,7 @@ async def answer(user_id: int, text: str) -> Reply:
         rows = (exact + [r for r in rows if (r["url"], r["article"]) not in seen])[:8]
     history = await db.history(user_id)
     contents = llm.history_contents(history, [llm.types.Part(text=f"{sources_block(rows)}\n\nSAVOL: {text}")])
-    raw = await llm.generate(contents, SYSTEM.format(today=_today()))
+    raw = await generate_clean(contents, SYSTEM.format(today=_today()), text)
     reply = finalize(raw, rows)
     await db.add_message(user_id, "user", text)
     await db.add_message(user_id, "model", reply.plain)
@@ -399,7 +424,7 @@ async def analyze_file(user_id: int, parts: list, caption: str) -> Reply:
     user_turn = f"[Yuborilgan hujjat: {extracted.get('doc_type', 'hujjat')}]\n{doc_text}\n\nSAVOL: {question}"
     contents = llm.history_contents(await db.history(user_id, limit=4),
                                     [llm.types.Part(text=f"{sources_block(rows)}\n\n{user_turn}")])
-    raw = await llm.generate(contents, FILE_SYSTEM.format(today=_today()))
+    raw = await generate_clean(contents, FILE_SYSTEM.format(today=_today()), question)
     reply = finalize(raw, rows)
     await db.add_message(user_id, "user", user_turn[:12000])  # keeps follow-up questions about the document working
     await db.add_message(user_id, "model", reply.plain)

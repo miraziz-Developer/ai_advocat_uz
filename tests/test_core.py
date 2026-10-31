@@ -157,3 +157,11 @@ def test_cited_articles():
     assert rag.cited("Jinoyat-protsessual kodeksi 100 modda") == [("100", [111460])]
     assert rag.cited("Fuqarolik kodeksi 551-modda va 382-modda") == [("551", [111189, 180552]), ("382", [111189, 180552])]
     assert rag.cited("454-modda nima?") == []  # no code named: ambiguous
+
+
+def test_garbled():
+    assert rag.garbled("jarima", "Tezlik belgilanши mumkin")
+    assert rag.garbled("jarima", "javobgarlik conductoriga o'tadi")
+    assert not rag.garbled("jarima", "Ma'muriy javobgarlik, chek, BHMning 2 baravari [1].")
+    assert not rag.garbled("Штраф за скорость", "Штраф до 5 БРВ [1].")
+    assert rag.garbled("Штраф", "Штрaф")  # Latin 'a' inside a Cyrillic word
