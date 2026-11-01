@@ -291,7 +291,9 @@ def test_svetofor_is_traffic_not_electricity():
 
 
 def test_candidate_list_one_line_per_article():
-    c = lambda i, doc, art: {"id": i, "doc_id": doc, "article": art, "snippet": "matn", "title": "Mehnat kodeksi", "kind": "law"}
+    def c(i, doc, art):
+        return {"id": i, "doc_id": doc, "article": art, "snippet": "matn", "title": "Mehnat kodeksi", "kind": "law"}
+
     listing, kept = rag.candidate_list([c(1, 5, "333-modda. Ish haqi"), c(2, 5, "333-modda. Ish haqi"), c(3, 7, "1-modda. X")])
     assert [k["id"] for k in kept] == [1, 3] and listing.count("333-modda") == 1
 
