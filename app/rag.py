@@ -230,6 +230,11 @@ TOPICS = [
      "kommunal xizmat isteʼmolchi hisoblagich tolov"),
     (r"kredit|qarz|bank|mikroqarz|nasiya|foiz|dolg|zaym", ["istemol krediti", "fuqarolik kodeksi (birinchi"], "kredit qarz foiz"),
     (r"ipoteka|garov", ["ipoteka togrisida", "garov togrisida"], "ipoteka garov"),
+    # people say "sigaret chekish", the code says "tamaki mahsulotini iste'mol qilish"
+    (r"sigaret|chekish|chekdim|chekayotgan|tamaki|chilim|kalyan|veyp|vape|kurit",
+     ["mamuriy javobgarlik togrisidagi kodeksi"], "jamoat joylarida tamaki mahsulotini istemol qilish"),
+    (r"mulk\w*\b.{0,15}shak|mulkchilik|xususiy mulk|ommaviy mulk|davlat mulki|mulk turlari", ["fuqarolik kodeksi (birinchi"],
+     "mulk shakllari xususiy mulk ommaviy mulk"),
     (r"dokon|sifatsiz|kafolat|tovar|qaytarib olish|xarid|"
      r"sotib oldim|buzildi|almashtir|magazin|vozvrat|garanti",
      ["istemolchilarning huquqlarini"],

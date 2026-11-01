@@ -259,3 +259,12 @@ async def test_replace_law_stores_the_lex_url(monkeypatch):
     monkeypatch.setattr(db, "_run", run)
     await db.replace_law(5, "Qonun", "https://lex.uz/uz/docs/5", "h", [], kind="law")
     assert ("https://lex.uz/uz/docs/5" in executed[-1]) and not any("postgresql" in str(a) for a in executed)
+
+
+def test_topics_smoking_and_property_forms():
+    names = {97664: "O'zbekiston Respublikasining Ma'muriy javobgarlik to'g'risidagi kodeksi",
+             111189: "Fuqarolik kodeksi (birinchi qism)"}
+    ids, terms = rag.topic_laws("jamoat joyida sigaret chekish qancha bhm", names)
+    assert ids == [97664] and "tamaki" in terms
+    assert rag.topic_laws("mulkni qanday shakklari bor", names)[0] == [111189]
+    assert rag.topic_laws("MIB cheklash qo'ydi", names)[0] != [97664]  # "cheklash" is not smoking
