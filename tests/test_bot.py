@@ -13,6 +13,7 @@ from aiogram.types import CallbackQuery, Chat, Message, PhotoSize, Update, User,
 
 from app import bot as botmod
 from app import config, rag
+from app.categories import CATEGORIES
 
 DP = Dispatcher()  # a router can be attached only once
 DP.include_router(botmod.router)
@@ -63,6 +64,10 @@ class FakeDB:
 
     async def save_feedback(self, uid, good):
         self.feedback.append(good)
+
+    async def add_credits(self, uid, n):
+        self.credits += n
+        return self.credits
 
     async def spend_credit(self, uid):
         if self.credits > 0:
@@ -127,9 +132,26 @@ async def click(env, data):
 async def test_start_and_menu_buttons(env):
     await send(env, "/start")
     assert "Assalomu alaykum" in env.session.texts()[-1]
+    await send(env, CATEGORIES[1][0])  # "Mehnat va ijtimoiy"
+    last = [m for m in env.session.sent if isinstance(m, SendMessage)][-1]
+    assert [b[0].callback_data for b in last.reply_markup.inline_keyboard][0] == "s:1:0"
+    await click(env, "s:1:0")  # "Ish haqi"
+    edit = [m for m in env.session.sent if type(m).__name__ == "EditMessageText"][-1]
+    assert "Ish haqi" in edit.text and env.db.messages[-1][0] == "model"  # topic remembered for the next answer
+    await click(env, "e:1:0:0")  # tapped example question gets a real answer
+    assert "JAVOB: " + CATEGORIES[1][1][0][2][0] in env.session.texts()[-1]
+
+
+async def test_old_keyboard_buttons_still_work(env):
     await send(env, "👷 Mehnat")
-    assert "Mehnat munosabatlari" in env.session.texts()[-1]
-    assert env.db.messages[-1][0] == "model"  # topic remembered for the next answer
+    texts = env.session.texts()
+    assert any("Ish haqi" in t for t in texts) and "Menyu yangilandi" in texts[-1]
+
+
+def test_menu_callbacks_fit_telegram_limits():
+    for i, (_, subs) in enumerate(CATEGORIES):
+        for j, (_name, _, examples) in enumerate(subs):
+            assert len(f"e:{i}:{j}:{len(examples) - 1}".encode()) <= 64 and examples
 
 
 async def test_question_gets_answer_and_paid_offer(env):
@@ -202,3 +224,43 @@ async def test_users_command_is_admin_only(env):
 async def test_missing_command_is_admin_only(env):
     await send(env, "/missing")
     assert "Noma'lum buyruq" in env.session.texts()[-1]
+
+
+async def test_paid_draft_collects_details_then_charges_once(env, monkeypatch):
+    env.db.credits, env.db.pending = 1, "ish beruvchiga talabnoma"
+    drafted = []
+
+    async def fields(uid, desc):
+        return [{"label": "Sizning F.I.Sh.", "hint": "Aliyev Vali", "known": ""},
+                {"label": "Manzil", "hint": "tuman, ko'cha", "known": ""},
+                {"label": "Ish joyi", "hint": "", "known": "Nur MChJ"}]
+
+    async def draft_document(uid, desc, details):
+        drafted.append(details)
+        return "TALABNOMA", f"Men, {details['Sizning F.I.Sh.']}, [manzil]"
+
+    monkeypatch.setattr(rag, "document_fields", fields)
+    monkeypatch.setattr(rag, "draft_document", draft_document)
+    await click(env, "draft")
+    assert "(1/2)" in env.session.texts()[-1] and "F.I.Sh." in env.session.texts()[-1]  # known "Ish joyi" not asked
+    await send(env, "Erkinaliyev Miraziz")
+    await click(env, "f:skip")
+    summary = env.session.texts()[-1]
+    assert "Erkinaliyev Miraziz" in summary and "Nur MChJ" in summary and env.db.credits == 1  # nothing charged yet
+    await click(env, "draft_go")
+    await click(env, "draft_go")  # double tap
+    assert env.db.credits == 0 and len(drafted) == 1
+    assert drafted[0] == {"Sizning F.I.Sh.": "Erkinaliyev Miraziz", "Manzil": "", "Ish joyi": "Nur MChJ"}
+    assert any(type(m).__name__ == "SendDocument" for m in env.session.sent)
+
+
+async def test_draft_cancel_keeps_credit(env, monkeypatch):
+    env.db.credits, env.db.pending = 1, "ariza"
+
+    async def fields(uid, desc):
+        return [{"label": "F.I.Sh.", "hint": "", "known": ""}]
+
+    monkeypatch.setattr(rag, "document_fields", fields)
+    await click(env, "draft")
+    await click(env, "f:cancel")
+    assert "Kredit yechilmadi" in env.session.texts()[-1] and env.db.credits == 1

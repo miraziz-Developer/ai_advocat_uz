@@ -6,10 +6,10 @@ modda havola bilan ko'rsatiladi. Bazada mos modda topilmasa, AI buni ochiq aytad
 ## Nima qila oladi
 | Funksiya | Narx |
 |---|---|
-| Huquqiy savol-javob, vaziyat tugmalari (Mehnat, Uy-joy, Oila, Jarima, Iste'molchi, Meros) | bepul |
+| Huquqiy savol-javob; 4 bo'lim (Oila va fuqarolik, Mehnat, Jarima va jinoyat, Davlat va biznes) → mavzular → bir bosishda javob beradigan tayyor savollar (`app/categories.py`) | bepul |
 | Shartnoma yoki hujjatni rasm / albom (10 sahifagacha) / PDF / Word orqali tahlil qilish | bepul |
 | Ovozli xabar (o'zbek / rus): matnga aylantirib, savolga javob beradi | bepul |
-| Ariza, shikoyat, da'vo arizasi, talabnoma tayyorlash (Word fayl) | pullik (`DOC_PRICE`) |
+| Ariza, shikoyat, da'vo arizasi, talabnoma tayyorlash (Word fayl): bot kerakli ma'lumotlarni (F.I.Sh., manzil, summa...) bittalab so'raydi, tasdiqlatadi, keyin ular hujjatga harfma-harf yozilganini tekshiradi | pullik (`DOC_PRICE`) |
 
 AI suhbat davomida hujjat kerakligini o'zi aniqlaydi va "📝 Hujjatni tayyorlab berish" tugmasini taklif qiladi.
 To'lov kartaga o'tkazma orqali qilinadi. Foydalanuvchi chek skrinshotini yuboradi, AI chekdagi summa, qabul

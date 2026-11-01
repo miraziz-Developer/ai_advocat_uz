@@ -83,10 +83,14 @@ HOZIR foydalanuvchi hujjat yoki rasm yubordi. Yuqoridagi 5-band o'rniga SHU form
 
 DRAFT_SYSTEM = """Sen O'zbekiston qonunchiligi bo'yicha tajribali yuristsan va rasmiy hujjat tuzasan. Bugun: {today}.
 • Hujjatni o'zbek tilida (lotin) rasmiy uslubda yoz, O'zbekistonda qabul qilingan shaklda:
-  kimga (organ/shaxs), kimdan, hujjat nomi, mazmun, talab qismi, ilovalar, sana va imzo joyi.
+  "Kimga:" (organ yoki shaxs nomi), "Kimdan:" (F.I.Sh., manzil, telefon), mazmun, talab qismi, ilovalar,
+  sana va imzo joyi. Shablon so'zlarini (masalan "[organ/shaxs]:") matnda qoldirma.
 • Normalarga faqat berilgan MANBALARdan havola qil (masalan: "Mehnat kodeksining 161-moddasiga asosan").
   Manbada bo'lmagan modda raqamini yozma.
-• Foydalanuvchi bermagan ma'lumotlar uchun to'rtburchak qavsli joy qoldir: [F.I.Sh.], [manzil], [sana].
+• FOYDALANUVCHI MA'LUMOTLARI berilgan bo'lsa, ularni hujjatning tegishli joyiga AYNAN shunday (harfma-harf, raqamma-
+  raqam) yoz: ism-familiya, manzil, sana, summa, raqamlarni o'zgartirma, tarjima qilma, qisqartirma.
+  Ma'lumot o'ylab topma. Berilmagan yoki bo'sh qolgan ma'lumotlar uchun to'rtburchak qavsli joy qoldir:
+  [F.I.Sh.], [manzil], [sana].
 • Har bir moddani manbada qanday bo'lsa, aynan o'sha raqam bilan bir marta keltir; qavs ichida tuzatish
   yoki "manbada keltirilgan" kabi izohlar yozma.
 • Markdown ishlatma. Birinchi qator — faqat hujjat nomi (masalan: DA'VO ARIZASI); matn ichida uni takrorlama.
@@ -610,14 +614,66 @@ async def analyze_file(user_id: int, parts: list, caption: str) -> Reply:
     return reply
 
 
-async def draft_document(user_id: int, description: str) -> tuple[str, str]:
-    """Returns (title, body) of the drafted document."""
+FIELDS_SCHEMA = {"type": "object", "properties": {"fields": {"type": "array", "items": {
+    "type": "object", "properties": {"label": {"type": "string"}, "hint": {"type": "string"}, "known": {"type": "string"}},
+    "required": ["label", "hint", "known"]}}}, "required": ["fields"]}
+FIELDS_SYSTEM = ("Sen yuristsan. Foydalanuvchi so'ragan hujjatni to'g'ri tuzish uchun undan qaysi ma'lumotlar kerakligini "
+                 "aniqla: 3-8 ta. Odatda: arizachining F.I.Sh., manzili va telefoni; kimga (organ yoki shaxs nomi, "
+                 "manzili); hujjatga xos faktlar (sana, summa, shartnoma raqami, ish joyi, lavozim va h.k.). "
+                 "label — qisqa nom (masalan: \"Sizning F.I.Sh.\"), hint — qanday yozish namunasi. Suhbatdan aniq "
+                 "ma'lum bo'lgan qiymatni known ga aynan yoz, aks holda known bo'sh qolsin. O'ylab topma.")
+GENERIC_FIELDS = [{"label": "Sizning F.I.Sh.", "hint": "Masalan: Aliyev Vali Karimovich", "known": ""},
+                  {"label": "Sizning manzilingiz", "hint": "Viloyat, tuman, ko'cha, uy", "known": ""},
+                  {"label": "Telefon raqamingiz", "hint": "+998 90 123 45 67", "known": ""},
+                  {"label": "Hujjat kimga yoziladi", "hint": "Tashkilot yoki shaxs nomi, manzili", "known": ""}]
+
+
+async def document_fields(user_id: int, description: str) -> list[dict]:
+    """What to ask before drafting, with values already known from the conversation pre-filled."""
+    history = await db.history(user_id, limit=10)
+    convo = "\n".join(f"{r['role']}: {r['content'][:800]}" for r in history)
+    try:
+        plan = await asyncio.wait_for(llm.generate_json(
+            f"Suhbat:\n{convo or '-'}\n\nKerakli hujjat: {description}", FIELDS_SYSTEM, FIELDS_SCHEMA, timeout=20), 30)
+    except Exception as exc:
+        log.warning("document fields failed (%s), asking the generic ones", type(exc).__name__)
+        return GENERIC_FIELDS
+    fields = [{"label": f["label"].strip()[:60], "hint": (f.get("hint") or "").strip()[:120],
+               "known": (f.get("known") or "").strip()[:300]} for f in plan.get("fields") or [] if f.get("label")]
+    return fields[:8] or GENERIC_FIELDS
+
+
+def _squash(text: str) -> str:
+    return " ".join(normalize(text).lower().split())
+
+
+def missing_values(text: str, details: dict[str, str]) -> list[str]:
+    """Labels whose user-given value does not appear verbatim in the drafted text."""
+    body = _squash(text)
+    return [label for label, value in details.items() if value.strip() and _squash(value) not in body]
+
+
+async def draft_document(user_id: int, description: str, details: dict[str, str] | None = None) -> tuple[str, str]:
+    """Returns (title, body) of the drafted document. details: label -> value the user typed (empty = placeholder)."""
+    details = details or {}
     rows = await retrieve(*await search_query(user_id, f"Hujjat tayyorlash kerak: {description}"), question=description)
     history = await db.history(user_id, limit=10)
-    contents = llm.history_contents(history, [llm.types.Part(
-        text=f"{sources_block(rows)}\n\nYuqoridagi suhbat asosida quyidagi hujjatni tuzib ber: {description}")])
-    raw = await llm.generate(contents, DRAFT_SYSTEM.format(today=_today()), temperature=0.3)
-    raw = raw.replace("**", "").strip()
+    empty = "[bo'sh — qavsli joy qoldir]"
+    given = "\n".join(f"{k}: {v or empty}" for k, v in details.items())
+    task = (f"{sources_block(rows)}\n\n" + (f"FOYDALANUVCHI MA'LUMOTLARI:\n{given}\n\n" if given else "")
+            + f"Yuqoridagi suhbat asosida quyidagi hujjatni tuzib ber: {description}")
+    grounding = "\n".join([sources_block(rows), description, *(h["content"] for h in history)])
+    raw = ""
+    for _ in range(2):  # a second try only if a name/number got altered or an article was made up
+        contents = llm.history_contents(history, [llm.types.Part(text=task)])
+        raw = (await llm.generate(contents, DRAFT_SYSTEM.format(today=_today()), temperature=0)).replace("**", "").strip()
+        lost, invented = missing_values(raw, details), ungrounded(raw, grounding)
+        if not lost and not invented:
+            break
+        log.warning("draft retry: lost %s, invented articles %s", lost, invented)
+        task += ("\n\nDIQQAT, oldingi variantda xato bor edi: "
+                 + (f"bu ma'lumotlar aynan yozilmagan: {', '.join(lost)}. " if lost else "")
+                 + (f"manbada yo'q moddalar keltirilgan: {', '.join(invented)}." if invented else ""))
     title, _, body = raw.partition("\n")
     title = title.strip(" #") or "HUJJAT"
     lines = body.strip().split("\n")

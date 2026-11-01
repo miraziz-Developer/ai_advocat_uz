@@ -310,3 +310,10 @@ async def test_retrieve_falls_back_when_picker_fails(monkeypatch):
     monkeypatch.setattr(rag, "_search", search)
     monkeypatch.setattr(rag, "pick_articles", broken)
     assert await rag.retrieve("q", [1], question="savol") == plain
+
+
+def test_missing_values_checks_user_details_verbatim():
+    text = "Men, Erkinaliyev Miraziz,  Toshkent sh. Chilonzor t. 5-uy, 7 500 000 so'm talab qilaman. [telefon]"
+    details = {"F.I.Sh.": "Erkinaliyev  Miraziz", "Manzil": "Toshkent sh. Chilonzor t. 5-uy", "Summa": "7 500 000",
+               "Telefon": "", "Sana": "12.10.2026"}
+    assert rag.missing_values(text, details) == ["Sana"]  # empty values are placeholders, not misses

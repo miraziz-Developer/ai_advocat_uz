@@ -20,6 +20,7 @@ from docx import Document as Docx
 from google.genai import errors as genai_errors
 
 from app import config, db, llm, payments, rag
+from app.categories import CATEGORIES, OLD_BUTTONS
 
 log = logging.getLogger(__name__)
 router = Router()
@@ -32,32 +33,17 @@ FILE_MIMES = {"application/pdf", "image/jpeg", "image/png", "image/webp", "image
 class St(StatesGroup):
     receipt = State()   # waiting for a payment receipt screenshot
     doc_desc = State()  # waiting for "what document do you need"
+    doc_field = State()  # collecting the details the document needs (name, address, ...), one at a time
 
 
 DISCLAIMER = ("⚠️ Men sun'iy intellektman, litsenziyali advokat emasman. Javoblarim lex.uz'dagi rasmiy qonun "
               "matnlariga asoslanadi va manba havolasi bilan beriladi, lekin muhim qarorlardan oldin advokat "
               "bilan maslahatlashing.")
 
-SITUATIONS = {
-    "👷 Mehnat": "Mehnat munosabatlari bo'yicha yordam beraman. Iltimos, yozing:\n• Nima bo'ldi (ishdan bo'shatish, "
-                "ish haqi to'lanmagan, ta'til, shartnoma...)?\n• Rasmiy mehnat shartnomasi bormi?\n• Qachon sodir bo'ldi?",
-    "🏠 Uy-joy, ijara": "Uy-joy va ijara bo'yicha yordam beraman. Yozing:\n• Siz ijarachimisiz yoki uy egasi?\n"
-                       "• Yozma shartnoma bormi?\n• Muammo nimada (chiqarib yuborish, depozit, to'lov, ta'mir...)?",
-    "👨‍👩‍👧 Oila, ajrashish": "Oila masalalari bo'yicha yordam beraman. Yozing:\n• Masala nima (ajrashish, aliment, "
-                            "bolalar, mol-mulk bo'lish)?\n• Nikoh FHDYOda qayd etilganmi?\n• Voyaga yetmagan bolalar bormi?",
-    "🚗 Jarima, YHXX": "Jarima va yo'l harakati bo'yicha yordam beraman. Yozing:\n• Qanday jarima yoki qoidabuzarlik?\n"
-                      "• Qachon va qanday rasmiylashtirildi (kamera, inspektor)?\n• Rozimisiz yoki shikoyat qilmoqchimisiz?",
-    "🛒 Iste'molchi": "Iste'molchi huquqlari bo'yicha yordam beraman. Yozing:\n• Nima sotib oldingiz / qanday xizmat?\n"
-                     "• Muammo nimada (sifatsiz, qaytarib olishmayapti, kafolat)?\n• Chek yoki shartnoma bormi?",
-    "📜 Meros": "Meros masalalari bo'yicha yordam beraman. Yozing:\n• Meros qoldiruvchi kim va qachon vafot etgan?\n"
-               "• Vasiyatnoma bormi?\n• Merosxo'rlar kimlar va nizo nimada?",
-}
-
 MENU = ReplyKeyboardMarkup(resize_keyboard=True, keyboard=[
     [KeyboardButton(text="💬 Savol berish"), KeyboardButton(text="📄 Hujjatni tekshirish")],
-    [KeyboardButton(text="👷 Mehnat"), KeyboardButton(text="🏠 Uy-joy, ijara")],
-    [KeyboardButton(text="👨‍👩‍👧 Oila, ajrashish"), KeyboardButton(text="🚗 Jarima, YHXX")],
-    [KeyboardButton(text="🛒 Iste'molchi"), KeyboardButton(text="📜 Meros")],
+    [KeyboardButton(text=CATEGORIES[0][0]), KeyboardButton(text=CATEGORIES[1][0])],
+    [KeyboardButton(text=CATEGORIES[2][0]), KeyboardButton(text=CATEGORIES[3][0])],
     [KeyboardButton(text="📝 Hujjat tayyorlatish"), KeyboardButton(text="💳 Balans")],
     [KeyboardButton(text="🆕 Yangi suhbat")],
 ])
@@ -128,16 +114,16 @@ async def alert_admins(bot: Bot, text: str) -> None:
             log.exception("could not alert admin %s", admin)
 
 
-async def quota_ok(message: Message) -> bool:
-    if await db.take_daily_quota(message.from_user.id, config.FREE_DAILY_LIMIT):
+async def quota_ok(message: Message, user_id: int | None = None) -> bool:
+    if await db.take_daily_quota(user_id or message.from_user.id, config.FREE_DAILY_LIMIT):
         return True
     await message.answer(f"Bugungi bepul limit ({config.FREE_DAILY_LIMIT} ta so'rov) tugadi. Ertaga yana yozing 🙏")
     return False
 
 
-async def reply_with_offer(message: Message, reply: rag.Reply) -> None:
+async def reply_with_offer(message: Message, reply: rag.Reply, user_id: int | None = None) -> None:
     if reply.offer:
-        await db.set_pending_doc(message.from_user.id, reply.offer)
+        await db.set_pending_doc(user_id or message.from_user.id, reply.offer)
         await send_long(message, reply.text + f"\n\n📝 <b>Kerakli hujjat:</b> {html.escape(reply.offer)}\n"
                                               "Tayyor Word faylini yozib beraman 👇",
                         parse_mode="HTML", reply_markup=offer_kb(feedback=True))
@@ -156,7 +142,8 @@ async def start(message: Message, state: FSMContext) -> None:
         "Assalomu alaykum! Men O'zbekiston qonunchiligi bo'yicha AI huquqiy yordamchiman.\n\n"
         "• Vaziyatingizni yozing — qonun bo'yicha nima qilish kerakligini moddalar bilan tushuntiraman.\n"
         "• Shartnoma yoki hujjat rasmini / PDF'ini yuboring — tahlil qilib, xavfli joylarini ko'rsataman.\n"
-        "• Ariza, shikoyat, da'vo arizasini tayyorlab beraman.\n\n" + DISCLAIMER,
+        "• Ariza, shikoyat, da'vo arizasini ismingiz va ma'lumotlaringiz bilan to'ldirilgan holda tayyorlab beraman.\n"
+        "• Pastdagi bo'limlardan mavzuni tanlang — tayyor savollar bor 👇\n\n" + DISCLAIMER,
         reply_markup=MENU,
     )
 
@@ -185,12 +172,66 @@ async def check_doc(message: Message, state: FSMContext) -> None:
                          "«Shu ijara shartnomasini imzolasam bo'ladimi?»")
 
 
-@router.message(F.text.in_(SITUATIONS))
-async def situation(message: Message, state: FSMContext) -> None:
+def category_kb(i: int) -> InlineKeyboardMarkup:
+    subs = CATEGORIES[i][1]
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=name, callback_data=f"s:{i}:{j}")]
+                                                 for j, (name, _, _) in enumerate(subs)])
+
+
+def situation_kb(i: int, j: int) -> InlineKeyboardMarkup:
+    examples = CATEGORIES[i][1][j][2]
+    rows = [[InlineKeyboardButton(text=f"❓ {q}"[:60], callback_data=f"e:{i}:{j}:{k}")] for k, q in enumerate(examples)]
+    return InlineKeyboardMarkup(inline_keyboard=rows + [[InlineKeyboardButton(text="⬅️ Orqaga", callback_data=f"c:{i}")]])
+
+
+@router.message(F.text.in_([c[0] for c in CATEGORIES]))
+async def category(message: Message, state: FSMContext) -> None:
     await state.clear()
-    prompt = SITUATIONS[message.text]
-    await db.add_message(message.from_user.id, "model", prompt)  # so the next answer knows the topic
-    await message.answer(prompt)
+    i = [c[0] for c in CATEGORIES].index(message.text)
+    await message.answer(f"<b>{html.escape(message.text)}</b>\nQaysi mavzu?", parse_mode="HTML", reply_markup=category_kb(i))
+
+
+@router.callback_query(F.data.startswith("c:"))
+async def category_back(cb: CallbackQuery) -> None:
+    i = int(cb.data.split(":")[1])
+    await cb.message.edit_text(f"<b>{html.escape(CATEGORIES[i][0])}</b>\nQaysi mavzu?", parse_mode="HTML",
+                               reply_markup=category_kb(i))
+    await cb.answer()
+
+
+async def show_situation(message: Message, user_id: int, i: int, j: int, edit: bool = False) -> None:
+    name, prompt, _ = CATEGORIES[i][1][j]
+    await db.add_message(user_id, "model", prompt)  # so the next answer knows the topic
+    text = f"<b>{html.escape(name)}</b>\n\n{html.escape(prompt)}\n\nYoki tayyor savolni bosing 👇"
+    if edit:
+        await message.edit_text(text, parse_mode="HTML", reply_markup=situation_kb(i, j))
+    else:
+        await message.answer(text, parse_mode="HTML", reply_markup=situation_kb(i, j))
+
+
+@router.callback_query(F.data.startswith("s:"))
+async def situation(cb: CallbackQuery) -> None:
+    _, i, j = cb.data.split(":")
+    await db.ensure_user(cb.from_user.id)
+    await show_situation(cb.message, cb.from_user.id, int(i), int(j), edit=True)
+    await cb.answer()
+
+
+@router.message(F.text.in_(OLD_BUTTONS))
+async def old_situation(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await db.ensure_user(message.from_user.id)
+    await show_situation(message, message.from_user.id, *OLD_BUTTONS[message.text])
+    await message.answer("Menyu yangilandi 👇", reply_markup=MENU)
+
+
+@router.callback_query(F.data.startswith("e:"))
+async def example_question(cb: CallbackQuery, bot: Bot) -> None:
+    _, i, j, k = cb.data.split(":")
+    question = CATEGORIES[int(i)][1][int(j)][2][int(k)]
+    await cb.answer()
+    await cb.message.answer(f"❓ {question}")
+    await answer_text(cb.message, bot, cb.from_user.id, question)
 
 
 @router.message(F.text == "💳 Balans")
@@ -219,7 +260,8 @@ async def doc_desc(message: Message, state: FSMContext) -> None:
     await db.ensure_user(message.from_user.id)
     await db.set_pending_doc(message.from_user.id, description)
     await message.answer(f"«{description}»\n\nHujjat Word (.docx) faylda, qonun moddalariga havolalar bilan "
-                         "tayyorlanadi. Bo'sh qolgan joylarni ([F.I.Sh.], [manzil]) o'zingiz to'ldirasiz.",
+                         "tayyorlanadi. Avval kerakli ma'lumotlarni (F.I.Sh., manzil va h.k.) so'rayman — hujjat aynan "
+                         "siz uchun to'ldirilgan holda chiqadi.",
                          reply_markup=offer_kb())
 
 
@@ -241,13 +283,92 @@ async def pay(cb: CallbackQuery, state: FSMContext) -> None:
     await cb.answer()
 
 
+FIELD_KB = InlineKeyboardMarkup(inline_keyboard=[[
+    InlineKeyboardButton(text="⏭ O'tkazib yuborish", callback_data="f:skip"),
+    InlineKeyboardButton(text="❌ Bekor qilish", callback_data="f:cancel")]])
+
+
 @router.callback_query(F.data == "draft")
-async def draft(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+async def draft(cb: CallbackQuery, state: FSMContext) -> None:
+    """Paid document: first the details it needs, then a confirmation, and only then the credit is spent."""
     user = await db.ensure_user(cb.from_user.id)
     await cb.answer()
     if not user["pending_doc"]:
         await cb.message.answer("Avval qanday hujjat kerakligini yozing: «📝 Hujjat tayyorlatish».")
         return
+    if user["credits"] < 1:
+        await state.set_state(St.receipt)
+        await cb.message.answer("Hujjat tayyorlash pullik xizmat.\n\n" + payment_text())
+        return
+    await cb.message.answer("🧾 Hujjat uchun qanday ma'lumotlar kerakligini aniqlayapman...")
+    fields = await rag.document_fields(cb.from_user.id, user["pending_doc"])
+    await state.set_state(St.doc_field)
+    await state.set_data({"desc": user["pending_doc"], "fields": fields,
+                          "values": {f["label"]: f["known"] for f in fields if f["known"]},
+                          "ask": [f["label"] for f in fields if not f["known"]]})
+    await ask_next_field(cb.message, state)
+
+
+async def ask_next_field(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    fields, values = data["fields"], data["values"]
+    todo = [f for f in fields if f["label"] not in values]
+    if todo:
+        f = todo[0]
+        ask = data.get("ask") or [x["label"] for x in fields]
+        n = ask.index(f["label"]) + 1 if f["label"] in ask else 1
+        hint = f["hint"] if not f["hint"] or f["hint"].lower().startswith("masalan") else f"Masalan: {f['hint']}"
+        await message.answer(f"✍️ ({n}/{len(ask)}) <b>{html.escape(f['label'])}</b>\n<i>{html.escape(hint)}</i>",
+                             parse_mode="HTML", reply_markup=FIELD_KB)
+        return
+    lines = [f"• <b>{html.escape(f['label'])}:</b> {html.escape(values.get(f['label']) or '[bo‘sh qoladi]')}" for f in fields]
+    await message.answer(
+        f"📋 <b>{html.escape(data['desc'])}</b>\n\n" + "\n".join(lines)
+        + "\n\nHammasi to'g'rimi? Ism, manzil va raqamlar hujjatga aynan shunday yoziladi.",
+        parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Tasdiqlash va tayyorlash (1 kredit)", callback_data="draft_go")],
+            [InlineKeyboardButton(text="✏️ Qaytadan kiritish", callback_data="f:redo"),
+             InlineKeyboardButton(text="❌ Bekor qilish", callback_data="f:cancel")]]))
+
+
+@router.message(St.doc_field, F.text)
+async def doc_field(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    todo = [f for f in data["fields"] if f["label"] not in data["values"]]
+    if todo:
+        data["values"][todo[0]["label"]] = message.text.strip()[:300]
+        await state.set_data(data)
+    await ask_next_field(message, state)
+
+
+@router.callback_query(St.doc_field, F.data.startswith("f:"))
+async def field_action(cb: CallbackQuery, state: FSMContext) -> None:
+    await cb.answer()
+    data = await state.get_data()
+    action = cb.data[2:]
+    if action == "cancel":
+        await state.clear()
+        await cb.message.answer("Bekor qilindi. Kredit yechilmadi.", reply_markup=MENU)
+        return
+    if action == "redo":
+        data["values"] = {}
+        data["ask"] = [f["label"] for f in data["fields"]]
+    elif action == "skip":
+        todo = [f for f in data["fields"] if f["label"] not in data["values"]]
+        if todo:
+            data["values"][todo[0]["label"]] = ""
+    await state.set_data(data)
+    await ask_next_field(cb.message, state)
+
+
+@router.callback_query(F.data == "draft_go")
+async def draft_go(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
+    data = await state.get_data()
+    await cb.answer()
+    if await state.get_state() != St.doc_field.state or "desc" not in data:
+        await cb.message.answer("Bu so'rov eskirgan. «📝 Hujjat tayyorlatish» ni qaytadan bosing.")
+        return
+    await state.clear()  # a second tap must not draft (and charge) twice
     if not await db.spend_credit(cb.from_user.id):
         await state.set_state(St.receipt)
         await cb.message.answer("Hujjat tayyorlash pullik xizmat.\n\n" + payment_text())
@@ -255,15 +376,16 @@ async def draft(cb: CallbackQuery, state: FSMContext, bot: Bot) -> None:
     await cb.message.answer("📝 Hujjat tayyorlanmoqda, 1 daqiqagacha vaqt olishi mumkin...")
     try:
         async with ChatActionSender.upload_document(bot=bot, chat_id=cb.message.chat.id):
-            title, body = await rag.draft_document(cb.from_user.id, user["pending_doc"])
+            title, body = await rag.draft_document(cb.from_user.id, data["desc"], data["values"])
     except Exception as exc:
         await db.add_credits(cb.from_user.id, 1)  # refund: the user paid for a document they did not get
         await ai_error(cb.message, exc)
         return
     await db.set_pending_doc(cb.from_user.id, None)
+    left = "\n\n[Kvadrat qavs] ichidagi joylarni to'ldiring." if "[" in body else ""
     await cb.message.answer_document(
         BufferedInputFile(make_docx(title, body), filename=f"{safe_filename(title)}.docx"),
-        caption="✅ Hujjat tayyor. [Kvadrat qavs] ichidagi joylarni to'ldiring va imzolang.\n\n" + DISCLAIMER,
+        caption=f"✅ Hujjat tayyor. O'qib chiqing va imzolang.{left}\n\n" + DISCLAIMER,
     )
 
 
@@ -504,17 +626,22 @@ async def chat(message: Message, bot: Bot) -> None:
     if message.text.startswith("/"):
         await message.answer("Noma'lum buyruq. /start ni bosing.")
         return
-    if not await quota_ok(message):
+    await answer_text(message, bot, message.from_user.id, message.text[:4000])
+
+
+async def answer_text(message: Message, bot: Bot, user_id: int, text: str) -> None:
+    """A question typed, tapped from the menu examples or spoken: the same answer path for all."""
+    if not await quota_ok(message, user_id):
         return
-    await db.ensure_user(message.from_user.id)
+    await db.ensure_user(user_id)
     await message.answer("⏳ Qonunlarni ko'rib chiqyapman, 15-30 soniya...")
     try:
         async with ChatActionSender.typing(bot=bot, chat_id=message.chat.id):
-            reply = await rag.answer(message.from_user.id, message.text[:4000])
+            reply = await rag.answer(user_id, text)
     except Exception as exc:
         await ai_error(message, exc)
         return
-    await reply_with_offer(message, reply)
+    await reply_with_offer(message, reply, user_id)
 
 
 MAX_VOICE_SECONDS = 600
