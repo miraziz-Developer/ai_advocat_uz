@@ -217,3 +217,45 @@ async def test_failed_regeneration_keeps_first_answer(monkeypatch):
     monkeypatch.setattr(rag.llm, "generate", generate)
     assert await rag.generate_clean([], "sys", "savol", "") == "Javob belgilanши [1]"
     assert len(calls) == 3
+
+
+def test_source_links_never_leave_lex_uz():
+    row = {**_row(2), "doc_id": 6257288, "url": "postgresql://user:secret@host/db"}  # a corrupted DB value
+    text = rag.finalize("Javob [1].", [row]).text
+    assert "secret" not in text and '<a href="https://lex.uz/uz/docs/6257288#102">' in text
+
+
+async def test_replace_law_stores_the_lex_url(monkeypatch):
+    executed = []
+
+    class Con:
+        async def execute(self, sql, *args):
+            executed.append(args)
+
+        async def executemany(self, sql, rows):
+            pass
+
+        def transaction(self):
+            return self
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class Pool:
+        def acquire(self):
+            return Con()
+
+    async def pool(url=None):
+        return Pool()
+
+    async def run(*args, url=None):
+        pass
+
+    monkeypatch.setattr(db, "law_dbs", lambda: ["postgresql://main", "postgresql://regs"])
+    monkeypatch.setattr(db, "pool", pool)
+    monkeypatch.setattr(db, "_run", run)
+    await db.replace_law(5, "Qonun", "https://lex.uz/uz/docs/5", "h", [], kind="law")
+    assert ("https://lex.uz/uz/docs/5" in executed[-1]) and not any("postgresql" in str(a) for a in executed)

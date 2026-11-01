@@ -381,7 +381,8 @@ def finalize(raw: str, rows) -> Reply:
         links = []
         for n in cited:
             r = rows[n - 1]
-            url = f"{r['url']}#{r['anchor']}" if r["anchor"] else r["url"]
+            base = r["url"] if r["url"].startswith("https://lex.uz/") else f"https://lex.uz/uz/docs/{r['doc_id']}"
+            url = f"{base}#{r['anchor']}" if r["anchor"] else base  # only ever link to lex.uz, whatever the DB holds
             article = r["article"].split(".")[0]  # "333-modda"
             name = html.escape(f"{display_title(r['title'], r.get('kind') or 'law')}, {article}", quote=False)
             links.append(f'[{n}] <a href="{html.escape(url)}">{name}</a>')

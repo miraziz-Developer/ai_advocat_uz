@@ -190,9 +190,9 @@ async def replace_law(doc_id: int, title: str, url: str, content_hash: str, rows
     """rows: (article, heading, anchor, body). Atomic: old version stays until the new one is complete.
     Embeddings are filled in later by set_embeddings()."""
     target = db_for(kind)
-    for url in law_dbs():  # a document may move between databases (e.g. regs loaded before the 2nd DB existed)
-        if url != target:
-            await _run("execute", "DELETE FROM laws WHERE doc_id=$1", doc_id, url=url)
+    for other in law_dbs():  # a document may move between databases (e.g. regs loaded before the 2nd DB existed)
+        if other != target:
+            await _run("execute", "DELETE FROM laws WHERE doc_id=$1", doc_id, url=other)
     p = await pool(target)
     async with p.acquire() as con, con.transaction():
         await con.execute("DELETE FROM laws WHERE doc_id=$1", doc_id)
@@ -247,7 +247,7 @@ async def search(query_embedding: list[float] | None, query_text: str, limit: in
         SELECT id, sum(w / (60 + r)) AS score FROM (SELECT * FROM v UNION ALL SELECT * FROM k UNION ALL SELECT * FROM d) x
         GROUP BY id ORDER BY score DESC LIMIT $3
     )
-    SELECT c.article, c.heading, c.anchor, c.body, l.title, l.url, l.kind, f.score
+    SELECT c.article, c.heading, c.anchor, c.body, l.doc_id, l.title, l.url, l.kind, f.score
     FROM fused f JOIN chunks c ON c.id = f.id JOIN laws l ON l.doc_id = c.doc_id
     ORDER BY f.score DESC
     """
@@ -261,7 +261,7 @@ async def search(query_embedding: list[float] | None, query_text: str, limit: in
 async def article_rows(number: str, doc_ids: list[int]) -> list:
     """The exact article a user cited ("Mehnat kodeksi 454-modda"), whatever database it lives in."""
     return (await _each("fetch", """
-        SELECT c.article, c.heading, c.anchor, c.body, l.title, l.url, l.kind, 1.0 AS score
+        SELECT c.article, c.heading, c.anchor, c.body, l.doc_id, l.title, l.url, l.kind, 1.0 AS score
         FROM chunks c JOIN laws l USING (doc_id)
         WHERE c.doc_id = ANY($2::bigint[]) AND c.article LIKE $1 || '-modda%'
         ORDER BY c.id LIMIT 2""", number, doc_ids))[:2]
