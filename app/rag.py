@@ -218,18 +218,26 @@ TOPICS = [
      r"zaderj|arest|sledovat|ugolovn",
      ["ozbekiston respublikasining jinoyat kodeksi", "jinoyat-protsessual"],
      "jinoyat jazo ushlab turish"),
-    (r"jarima|yhxx|gai|inspektor|haydovchilik|prava|mast holda|svetofor|tezlik|radar|kamera|qizil chiroq|"
-     r"mashina|avtomobil|piyoda|parkovka|toxtash joy|shtraf|gibdd|dps|skorost|voditel",
+    # only words that are about driving: "jarima"/"kamera" alone used to send every fine question here
+    (r"yhxx|yhxbb|\bgai\b|\bdps\b|yo.?l (politsiya|inspektor|harakat)|haydovchi|prava|mast holda|svetof|svetaf|tezlik|"
+     r"radar|qizil chiroq|mashina|avtomobil|piyoda|parkovka|toxtash joy|gibdd|skorost|voditel|xavfsizlik kamar",
      ["yol harakati qoidalarini tasdiqlash", "mamuriy javobgarlik togrisidagi kodeksi", "yol harakati togrisida"],
-     "haydovchi transport vositasi yol harakati jarima tezlik"),
+     ""),  # documents only: generic driving words pull the long catch-all articles (129, 134) to the top
+    # the code's own wording for what drivers say
+    (r"qizil chiroq|qizilga o.?t|svetof|svetaf", [], "svetoforning taqiqlovchi signaliga"),
+    (r"xavfsizlik kamar|\bkamar|motoshlem", [], "xavfsizlik kamaridan foydalanish qoidalariga rioya etmasligi"),
+    (r"tezlik|skorost|radar", [], "belgilangan harakat tezligini oshirib yuborishi"),
     (r"propiska|registratsiya|royxatga tur|yashash joyi|vaqtincha royxat|doimiy royxat",
      ["propiska", "yashash joyi manzilini", "doimiy yashash joyi boyicha"], "propiska yashash joyi royxatga olish doimiy vaqtincha"),
-    (r"kommunal|svet|elektr|gaz puli|tabiiy gaz|suv puli|issiq suv|hisoblagich|schetchik|isitish",
+    (r"kommunal|\bsvet\b|elektr|gaz puli|tabiiy gaz|suv puli|issiq suv|hisoblagich|schetchik|isitish",
      ["elektr energiyasini yetkazib berish tartibi", "elektr va issiqlik energiyasidan foydalanish qoidalari",
       "hisobga olish uskunala", "tabiiy gaz bilan limitsiz", "suv taminoti va suvoqava kommunal tizimidan foydalanish"],
      "kommunal xizmat isteʼmolchi hisoblagich tolov"),
-    (r"kredit|qarz|bank|mikroqarz|nasiya|foiz|dolg|zaym", ["istemol krediti", "fuqarolik kodeksi (birinchi"], "kredit qarz foiz"),
+    (r"kredit|qarz|bank|mikroqarz|nasiya|dolg|zaym", ["istemol krediti", "fuqarolik kodeksi (birinchi"], "kredit qarz foiz"),
     (r"ipoteka|garov", ["ipoteka togrisida", "garov togrisida"], "ipoteka garov"),
+    # a fine is set in the Code of Administrative Liability whatever special law forbids the act; no extra terms,
+    # so the router's own terms (what was done) decide which article
+    (r"jarima|\bbhm\b|shtraf|qancha to.?la|javobgarlik", ["mamuriy javobgarlik togrisidagi kodeksi"], ""),
     # people say "sigaret chekish", the code says "tamaki mahsulotini iste'mol qilish"
     (r"sigaret|chekish|chekdim|chekayotgan|tamaki|chilim|kalyan|veyp|vape|kurit",
      ["mamuriy javobgarlik togrisidagi kodeksi"], "jamoat joylarida tamaki mahsulotini istemol qilish"),
@@ -248,8 +256,9 @@ TOPICS = [
     (r"soliq|yatt|tadbirkor|biznes|patent|nalog", ["ozbekiston respublikasining soliq kodeksi"], "soliq soliq tolovchi"),
     (r"zoravon|kaltakla|tazyiq|himoya order", ["xotin-qizlarni tazyiq"], "zoravonlik himoya order"),
     (r"advokat", ["advokatura togrisida"], "advokat yuridik yordam"),
-    (r"shikoyat|murojaat|hokimiyat|byurokrat|javob bermay", ["jismoniy va yuridik shaxslarning murojaatlari"], "murojaat korib chiqish"),
-    (r"sud qarori|ijrochi|\bmib|majburiy ijro|ijro varaq|taqiq|chet elga chiq|chiqa olmay|xatla|qarzdor|undiruv|"
+    (r"murojaat|hokimiyat|byurokrat|javob bermay|davlat idora", ["jismoniy va yuridik shaxslarning murojaatlari"],
+     "murojaat korib chiqish"),
+    (r"sud qarori|ijrochi|\bmib|majburiy ijro|ijro varaq|taqiq qo.?y|chet elga chiq|chiqa olmay|xatla|qarzdor|undiruv|"
      r"ispolnitel|zapret|doljnik",
      ["sud hujjatlari va boshqa organlar hujjatlarini ijro etish togrisida", "chiqishini vaqtincha cheklash"],
      "qarzdor chiqishini vaqtincha cheklash cheklashni olib tashlash ixtiyoriy ijro bolib-bolib ijro kechiktirish"),
@@ -292,8 +301,11 @@ async def search_query(user_id: int, text: str) -> tuple[str, list[int]]:
               f"Suhbat:\n{convo or '-'}\n\nOxirgi xabar: {text}\n\n"
               "Tajribali advokatdek o'yla: bu vaziyatga qaysi hujjatlar taalluqli? Ro'yxatdan 1-4 ta ID tanla "
               "(masalan: o'g'rilik — Jinoyat kodeksi; ijara — Fuqarolik kodeksi; ish haqi — Mehnat kodeksi; "
-              "maxsus qonun bo'lsa — uni ham). Qidiruv uchun 3-6 ta aniq huquqiy atama yoz, \"O'zbekiston\", "
-              "\"kodeks\", \"modda\" kabi umumiy so'zlarsiz.")
+              "maxsus qonun bo'lsa — uni ham). Jarima yoki jazo so'ralsa, sanksiya turgan kodeksni (Ma'muriy "
+              "javobgarlik kodeksi yoki Jinoyat kodeksi) albatta tanla. Qidiruv uchun 3-6 ta aniq huquqiy atama yoz: "
+              "kundalik so'zlarni qonundagi rasmiy atamaga o'gir (sigaret chekish → tamaki mahsulotini iste'mol "
+              "qilish; oylik → ish haqi; propiska → yashash joyi bo'yicha ro'yxatga olish), huquqbuzarlik bo'lsa "
+              "uning qonundagi nomini yoz. \"O'zbekiston\", \"kodeks\", \"modda\" kabi umumiy so'zlarsiz.")
     try:
         plan = await asyncio.wait_for(llm.generate_json(
             prompt, "Sen O'zbekiston qonunchiligini to'liq biladigan advokatsan.", ROUTE_SCHEMA,

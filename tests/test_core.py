@@ -268,3 +268,23 @@ def test_topics_smoking_and_property_forms():
     assert ids == [97664] and "tamaki" in terms
     assert rag.topic_laws("mulkni qanday shakklari bor", names)[0] == [111189]
     assert rag.topic_laws("MIB cheklash qo'ydi", names)[0] != [97664]  # "cheklash" is not smoking
+
+
+def test_generic_words_do_not_pick_a_topic():
+    names = {1: "Yo'l harakati qoidalarini tasdiqlash to'g'risida",
+             97664: "O'zbekiston Respublikasining Ma'muriy javobgarlik to'g'risidagi kodeksi",
+             3: "Sud hujjatlari va boshqa organlar hujjatlarini ijro etish to'g'risida",
+             4: "Jismoniy va yuridik shaxslarning murojaatlari to'g'risida", 5: "Iste'mol krediti to'g'risida"}
+    ids, terms = rag.topic_laws("ko'chaga axlat tashlasam qancha jarima", names)
+    assert ids == [97664] and "haydovchi" not in terms  # a fine, but not a traffic one
+    assert 1 in rag.topic_laws("svetofordan o'tib ketdim jarima", names)[0]
+    assert rag.topic_laws("bu qonunan taqiqlanganmi", names)[0] == []
+    assert rag.topic_laws("qo'shnim menga shikoyat qildi", names)[0] == []
+    assert rag.topic_laws("ish haqi kompensatsiyasi necha foiz", names)[0] == []
+    assert rag.topic_laws("ishdan haydashdi", names)[0] == []  # not driving
+
+
+def test_svetofor_is_traffic_not_electricity():
+    names = {1: "Yo'l harakati qoidalarini tasdiqlash to'g'risida", 2: "Elektr energiyasini yetkazib berish tartibi"}
+    assert rag.topic_laws("svetaforni qizil chirog'idan o'tib ketdim", names)[0] == [1]
+    assert rag.topic_laws("3 kundan beri svet yo'q", names)[0] == [2]

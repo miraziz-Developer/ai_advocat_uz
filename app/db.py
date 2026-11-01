@@ -277,7 +277,10 @@ _STOP = {"nima", "qanday", "qancha", "qilish", "qilay", "kerak", "bilan", "uchun
          "ozbekiston", "respublikasi", "respublikasining", "respublika", "kodeks", "kodeksi", "kodeksiga", "modda",
          "moddasi", "moddalar", "qonun", "qonuni", "qonunchilik", "qonunchiligi", "belgilangan", "tartibi", "tartibda",
          "tahlili", "choralari", "huquqiy", "boyicha", "togrisida", "togrisidagi", "jazo", "jazosi", "jinoyat",
-         "jinoyati", "beriladi", "javobgarlik", "huquqbuzarlik", "huquqbuzarliklar", "mamuriy"}
+         "jinoyati", "beriladi", "javobgarlik", "huquqbuzarlik", "huquqbuzarliklar", "mamuriy",
+         # every article of the administrative code has these: they hid "mayda bezorilik" behind fine tables
+         "javobgarligi", "huquqbuzarligi", "jarima", "jarimasi", "jarimalar", "bazaviy", "hisoblash", "miqdori",
+         "miqdorida", "miqdorining", "baravari", "baravarigacha"}
 
 
 def _stem(w: str) -> str:
