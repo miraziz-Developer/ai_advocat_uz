@@ -18,7 +18,7 @@ CATEGORIES = [
          "Uy-joy va ijara bo'yicha yordam beraman. Yozing:\n• Siz ijarachimisiz yoki uy egasi?\n• Yozma shartnoma bormi?\n"
          "• Muammo nimada (chiqarib yuborish, depozit, to'lov, ta'mir)?",
          ["Uy egasi muddatidan oldin chiqib ket deyapti, shartnoma bor", "Ijaraga bergan uyimga pul to'lashmayapti",
-          "Depozitni qaytarishmayapti"]),
+          "Ijaradan chiqdim, uy egasi oldindan olgan pulimni qaytarmayapti"]),
         ("🤝 Qarz, shartnoma",
          "Qarz va shartnomalar bo'yicha yordam beraman. Yozing:\n• Qarz yoki shartnoma summasi va muddati?\n"
          "• Yozma tilxat yoki shartnoma bormi?\n• Hozir nima bo'lyapti?",

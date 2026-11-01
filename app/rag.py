@@ -231,6 +231,9 @@ TOPICS = [
     (r"qizil chiroq|qizilga o.?t|svetof|svetaf", [], "svetoforning taqiqlovchi signaliga"),
     (r"xavfsizlik kamar|\bkamar|motoshlem", [], "xavfsizlik kamaridan foydalanish qoidalariga rioya etmasligi"),
     (r"tezlik|skorost|radar", [], "belgilangan harakat tezligini oshirib yuborishi"),
+    # the code says "har yilgi", people say "yillik"
+    (r"yillik ta.?til|otpusk|ta.?til necha|ta.?til qancha", ["ozbekiston respublikasining mehnat kodeksi"],
+     "har yilgi asosiy eng kam mehnat tatilining davomiyligi"),
     (r"propiska|registratsiya|royxatga tur|yashash joyi|vaqtincha royxat|doimiy royxat",
      ["propiska", "yashash joyi manzilini", "doimiy yashash joyi boyicha"], "propiska yashash joyi royxatga olish doimiy vaqtincha"),
     (r"kommunal|\bsvet\b|elektr|gaz puli|tabiiy gaz|suv puli|issiq suv|hisoblagich|schetchik|isitish",

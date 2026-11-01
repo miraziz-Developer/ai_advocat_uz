@@ -317,3 +317,11 @@ def test_missing_values_checks_user_details_verbatim():
     details = {"F.I.Sh.": "Erkinaliyev  Miraziz", "Manzil": "Toshkent sh. Chilonzor t. 5-uy", "Summa": "7 500 000",
                "Telefon": "", "Sana": "12.10.2026"}
     assert rag.missing_values(text, details) == ["Sana"]  # empty values are placeholders, not misses
+
+
+def test_repealed_acts_are_detected():
+    header = '<span class="lx_status">\r\n   Ҳужжат кучини йўқотган&nbsp;12.09.1995\r\n</span>'
+    assert lexuz.repealed(header) == "12.09.1995"
+    assert lexuz.repealed("<p>Hujjat kuchini yo'qotgan 01.06.2017</p>") == "01.06.2017"
+    # an in-force code mentions other acts that lost force: not the same thing
+    assert lexuz.repealed("<p>2014 yil 4-son qarorga asosan ўз кучини йўқотган — ЎР ҚҲТ</p>") is None

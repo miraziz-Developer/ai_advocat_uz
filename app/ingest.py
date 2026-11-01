@@ -43,7 +43,10 @@ def law_name(title: str) -> str:
 
 
 async def ingest_one(session: aiohttp.ClientSession, doc_id: int, force: bool, kind: str = "law") -> str:
-    doc = lexuz.parse_document(doc_id, await lexuz.fetch_html(session, doc_id))
+    html = await lexuz.fetch_html(session, doc_id)
+    if lost := lexuz.repealed(html):  # answers must rest only on acts in force today
+        return f"repealed {lost}: {'removed' if await db.delete_law(doc_id) else 'skipped'}"
+    doc = lexuz.parse_document(doc_id, html)
     if not force and await db.law_hash(doc_id) == doc.content_hash:
         return f"unchanged: {doc.title}"
     law = law_name(doc.title)

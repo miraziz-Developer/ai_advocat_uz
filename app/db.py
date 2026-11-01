@@ -170,6 +170,14 @@ async def law_ids() -> list[int]:
     return sorted(r["doc_id"] for r in await _each("fetch", "SELECT doc_id FROM laws"))
 
 
+async def delete_law(doc_id: int) -> bool:
+    """Removes a repealed act (its chunks go with it: ON DELETE CASCADE). True if it was there."""
+    removed = False
+    for url in law_dbs():
+        removed |= (await _run("execute", "DELETE FROM laws WHERE doc_id=$1", doc_id, url=url)) != "DELETE 0"
+    return removed
+
+
 async def law_hash(doc_id: int) -> str | None:
     for url in law_dbs():
         if h := await _run("fetchval", "SELECT content_hash FROM laws WHERE doc_id=$1", doc_id, url=url):

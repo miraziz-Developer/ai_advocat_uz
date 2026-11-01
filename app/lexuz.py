@@ -86,6 +86,17 @@ REG_LISTS = {
     "Idoraviy": "https://lex.uz/uz/search/nat?lang=4&sort_id=3991",
     "Sud amaliyoti": "https://lex.uz/uz/search/court?lang=4",  # Supreme Court Plenum: how courts apply the law
 }
+# The page header of a repealed act: "Ҳужжат кучини йўқотган 12.09.1995". Article texts say "ўз кучини йўқотган"
+# about other acts, never with "ҳужжат" + a date, so in-force codes don't match.
+_REPEALED = re.compile(r"(?:ҳужжат кучини йўқотган|hujjat kuchini yo.qotgan)(?:&nbsp;|\s)*(\d{2}\.\d{2}\.\d{4})", re.I)
+
+
+def repealed(html: str) -> str | None:
+    """Date the act lost force, or None while it is in force."""
+    m = _REPEALED.search(html)
+    return m.group(1) if m else None
+
+
 _NORMATIVE = re.compile(r"nizom|qoida|tartib|reglament|yo.riqnoma|me.yor|talablar|tarif|to.lov|jarima|"
                         r"ro.yxatga olish|imtiyoz|nafaqa|pensiya|kommunal|yo.l harakati", re.I)
 _NOT_NORMATIVE = re.compile(r"o.zgartish|o.zgartirish|qo.shimcha|kuchini yo.qotgan|bekor qilish|ta.sis etish|"
