@@ -425,6 +425,16 @@ async def bad_answers(message: Message) -> None:
         await send_long(message, f"❓ {r['question'][:1500]}\n\n🤖 {r['answer'][:2000]}")
 
 
+@router.message(Command("missing"), F.from_user.id.in_(config.ADMIN_IDS))
+async def missing_answers(message: Message) -> None:
+    rows = await db.recent_not_found(10, list(config.ADMIN_IDS))
+    if not rows:
+        await message.answer("\"Bazada topilmadi\" javoblari yo'q 🎉")
+        return
+    lines = [f"• {r['created_at'].astimezone(TASHKENT):%d.%m %H:%M} — {html.escape(r['question'][:200])}" for r in rows]
+    await send_long(message, "🔎 <b>Bot modda topa olmagan savollar</b> (oxirgi 10 ta):\n\n" + "\n".join(lines), parse_mode="HTML")
+
+
 @router.message(Command("credit"), F.from_user.id.in_(config.ADMIN_IDS))
 async def credit(message: Message, command: CommandObject) -> None:
     try:

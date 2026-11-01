@@ -360,7 +360,57 @@ async def transcribe(audio: bytes, mime_type: str) -> str:
 _embed_paused_until = 0.0
 
 
-async def retrieve(query: str, doc_ids: list[int] | None = None) -> list:
+PICK_SCHEMA = {"type": "object", "properties": {"ids": {"type": "array", "items": {"type": "integer"}}}, "required": ["ids"]}
+PICK_SYSTEM = ("Sen tajribali yuristsan. Foydalanuvchi savoliga javob berish uchun ro'yxatdagi qaysi moddalar kerakligini "
+               "MA'NOSIGA qarab tanla: so'zlar mos kelishi shart emas (sigaret = tamaki mahsuloti, qizil chiroq = "
+               "svetoforning taqiqlovchi signali, oylik = ish haqi). Jarima yoki jazo so'ralsa, sanksiya belgilangan "
+               "moddani albatta tanla. Eng muhimidan boshlab 1-8 ta raqam qaytar; mosi bo'lmasa bo'sh ro'yxat.")
+
+
+def candidate_list(cands) -> tuple[str, list]:
+    """Numbered, de-duplicated (one chunk per article) list for the picker."""
+    seen, kept = set(), []
+    for c in cands:
+        key = (c["doc_id"], c["article"])
+        if key not in seen:
+            seen.add(key)
+            kept.append(c)
+    kept = kept[:80]  # ~3k tokens: keeps the extra model call around a second or two
+    lines = [f"{i}. [{display_title(c['title'], c['kind'] or 'law')[:45]}] {c['article'][:100]}"
+             + ("" if "modda" in c["article"] else f" — {' '.join(c['snippet'].split())[:70]}") for i, c in enumerate(kept, 1)]
+    return "\n".join(lines), kept
+
+
+async def pick_articles(question: str, query: str, doc_ids: list[int]) -> list:
+    """AI reads ~150 candidate article titles and picks by meaning; [] means 'fall back to plain search'."""
+    cands = await db.candidates(query, doc_ids or [])
+    if not cands:
+        return []
+    listing, kept = candidate_list(cands)
+    plan = await asyncio.wait_for(llm.generate_json(
+        f"SAVOL: {question}\n\nQIDIRUV ATAMALARI: {query}\n\nMODDALAR:\n{listing}", PICK_SYSTEM, PICK_SCHEMA,
+        models=config.LITE_MODELS, timeout=6), 9)
+    keys = [(kept[i - 1]["id"], kept[i - 1]["doc_id"]) for i in dict.fromkeys(plan.get("ids") or [])
+            if isinstance(i, int) and 0 < i <= len(kept)]
+    return await db.chunks_by_id(keys[:8]) if keys else []
+
+
+async def retrieve(query: str, doc_ids: list[int] | None = None, question: str = "") -> list:
+    """With the user's question, an AI picks the articles by meaning; plain hybrid search fills the rest
+    and is the fallback whenever the picker fails."""
+    rows = await _search(query, doc_ids)
+    if not question:
+        return rows
+    try:
+        picked = await pick_articles(question, query, doc_ids or [])
+    except Exception as exc:  # the answer must not depend on one more model call succeeding
+        log.warning("article picker failed (%s), using plain search", type(exc).__name__)
+        return rows
+    seen = {(r["url"], r["article"]) for r in picked}
+    return (picked + [r for r in rows if (r["url"], r["article"]) not in seen])[:8]
+
+
+async def _search(query: str, doc_ids: list[int] | None = None) -> list:
     global _embed_paused_until
     vector = None
     if time.monotonic() >= _embed_paused_until and await db.count_without_embedding():
@@ -521,7 +571,7 @@ def language_note(text: str) -> str:
 
 
 async def answer(user_id: int, text: str) -> Reply:
-    rows = await retrieve(*await search_query(user_id, text))
+    rows = await retrieve(*await search_query(user_id, text), question=text)
     exact = [r for n, docs in cited(text) for r in await db.article_rows(n, docs)]
     if exact:  # the article the user named goes first, so the answer can say what it really covers
         seen = {(r["url"], r["article"]) for r in exact}
@@ -547,7 +597,7 @@ async def analyze_file(user_id: int, parts: list, caption: str) -> Reply:
     )
     doc_text = (extracted.get("text") or "")[:20000]
     situation = f"{extracted.get('doc_type', '')}: {extracted.get('search_query') or caption or doc_text[:500]}"
-    rows = await retrieve(*await search_query(user_id, situation))
+    rows = await retrieve(*await search_query(user_id, situation), question=caption or situation)
     question = caption or "Shu hujjatni tahlil qilib ber."
     user_turn = f"[Yuborilgan hujjat: {extracted.get('doc_type', 'hujjat')}]\n{doc_text}\n\nSAVOL: {question}"
     contents = llm.history_contents(await db.history(user_id, limit=4),
@@ -562,7 +612,7 @@ async def analyze_file(user_id: int, parts: list, caption: str) -> Reply:
 
 async def draft_document(user_id: int, description: str) -> tuple[str, str]:
     """Returns (title, body) of the drafted document."""
-    rows = await retrieve(*await search_query(user_id, f"Hujjat tayyorlash kerak: {description}"))
+    rows = await retrieve(*await search_query(user_id, f"Hujjat tayyorlash kerak: {description}"), question=description)
     history = await db.history(user_id, limit=10)
     contents = llm.history_contents(history, [llm.types.Part(
         text=f"{sources_block(rows)}\n\nYuqoridagi suhbat asosida quyidagi hujjatni tuzib ber: {description}")])

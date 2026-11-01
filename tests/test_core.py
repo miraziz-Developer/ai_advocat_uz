@@ -288,3 +288,23 @@ def test_svetofor_is_traffic_not_electricity():
     names = {1: "Yo'l harakati qoidalarini tasdiqlash to'g'risida", 2: "Elektr energiyasini yetkazib berish tartibi"}
     assert rag.topic_laws("svetaforni qizil chirog'idan o'tib ketdim", names)[0] == [1]
     assert rag.topic_laws("3 kundan beri svet yo'q", names)[0] == [2]
+
+
+def test_candidate_list_one_line_per_article():
+    c = lambda i, doc, art: {"id": i, "doc_id": doc, "article": art, "snippet": "matn", "title": "Mehnat kodeksi", "kind": "law"}
+    listing, kept = rag.candidate_list([c(1, 5, "333-modda. Ish haqi"), c(2, 5, "333-modda. Ish haqi"), c(3, 7, "1-modda. X")])
+    assert [k["id"] for k in kept] == [1, 3] and listing.count("333-modda") == 1
+
+
+async def test_retrieve_falls_back_when_picker_fails(monkeypatch):
+    plain = [{"url": "u", "article": "1-modda"}]
+
+    async def search(query, doc_ids=None):
+        return plain
+
+    async def broken(*args):
+        raise TimeoutError
+
+    monkeypatch.setattr(rag, "_search", search)
+    monkeypatch.setattr(rag, "pick_articles", broken)
+    assert await rag.retrieve("q", [1], question="savol") == plain

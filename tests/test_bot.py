@@ -197,3 +197,8 @@ async def test_feedback_saved_and_buttons_removed(env):
 async def test_users_command_is_admin_only(env):
     await send(env, "/users")
     assert "Noma'lum buyruq" in env.session.texts()[-1]
+
+
+async def test_missing_command_is_admin_only(env):
+    await send(env, "/missing")
+    assert "Noma'lum buyruq" in env.session.texts()[-1]

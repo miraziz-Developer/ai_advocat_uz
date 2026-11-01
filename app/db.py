@@ -258,6 +258,39 @@ async def search(query_embedding: list[float] | None, query_text: str, limit: in
     return sorted((r for rows in results for r in rows), key=lambda r: r["score"], reverse=True)[:limit]
 
 
+async def candidates(query_text: str, doc_ids: list[int], per_doc: int = 15, overall: int = 20) -> list:
+    """A wide net for the AI article picker: the best keyword matches inside each chosen law plus across all laws.
+    Only titles and a short snippet: the picker reads meaning, so recall matters more than ranking here."""
+    q = or_query(query_text)
+    if not q:
+        return []
+    return await _each("fetch", """
+        WITH q AS (SELECT to_tsquery('simple', $1) AS q
+        ), d AS (
+            SELECT id, rk FROM (
+                SELECT id, row_number() OVER (PARTITION BY doc_id ORDER BY ts_rank(tsv, q, 1) DESC) AS rk
+                FROM chunks, q WHERE doc_id = ANY($2::bigint[]) AND tsv @@ q) x
+            WHERE rk <= $3
+        ), k AS (
+            SELECT id, row_number() OVER (ORDER BY ts_rank(tsv, q, 1) DESC) AS rk
+            FROM chunks, q WHERE tsv @@ q ORDER BY ts_rank(tsv, q, 1) DESC LIMIT $4
+        ), u AS (SELECT id, min(rk) AS rk FROM (SELECT * FROM d UNION ALL SELECT * FROM k) x GROUP BY id)
+        SELECT c.id, c.doc_id, c.article, left(c.body, 110) AS snippet, l.title, l.kind, u.rk
+        FROM u JOIN chunks c ON c.id = u.id JOIN laws l ON l.doc_id = c.doc_id
+        ORDER BY u.rk""", q, doc_ids, per_doc, overall)
+
+
+async def chunks_by_id(keys: list[tuple[int, int]]) -> list:
+    """keys: (chunk id, doc_id). Each database has its own id sequence, so an id alone matches a stranger elsewhere."""
+    rows = await _each("fetch", """
+        SELECT c.id, c.article, c.heading, c.anchor, c.body, l.doc_id, l.title, l.url, l.kind, 1.0 AS score
+        FROM chunks c JOIN laws l USING (doc_id)
+        WHERE (c.id, c.doc_id) IN (SELECT * FROM unnest($1::bigint[], $2::bigint[]))""",
+                       [k[0] for k in keys], [k[1] for k in keys])
+    order = {k: i for i, k in enumerate(keys)}
+    return sorted(rows, key=lambda r: order[(r["id"], r["doc_id"])])
+
+
 async def article_rows(number: str, doc_ids: list[int]) -> list:
     """The exact article a user cited ("Mehnat kodeksi 454-modda"), whatever database it lives in."""
     return (await _each("fetch", """
@@ -433,6 +466,17 @@ async def save_feedback(user_id: int, good: bool) -> None:
                (SELECT content FROM messages WHERE user_id=$1 AND role='user' ORDER BY id DESC LIMIT 1),
                (SELECT content FROM messages WHERE user_id=$1 AND role='model' ORDER BY id DESC LIMIT 1)""",
         user_id, good)
+
+
+async def recent_not_found(limit: int, exclude: list[int]) -> list[asyncpg.Record]:
+    """Questions the bot answered with 'no exact article in the database': each is a search miss or a missing law."""
+    return await _run("fetch", """
+        SELECT q.content AS question, m.content AS answer, m.created_at
+        FROM messages m
+        JOIN LATERAL (SELECT content FROM messages u WHERE u.user_id = m.user_id AND u.role = 'user' AND u.id < m.id
+                      ORDER BY u.id DESC LIMIT 1) q ON true
+        WHERE m.role = 'model' AND m.content ILIKE '%bazada topilmadi%' AND m.user_id <> ALL($2::bigint[])
+        ORDER BY m.id DESC LIMIT $1""", limit, exclude)
 
 
 async def recent_bad_feedback(limit: int) -> list[asyncpg.Record]:
