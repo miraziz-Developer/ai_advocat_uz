@@ -212,7 +212,9 @@ TOPICS = [
      ["fuqarolik kodeksi (ikkinchi", "ozbekiston respublikasining uy-joy kodeksi"],
      "ijara shartnomasi ijaraga beruvchi ijarachi"),
     # "o'g'irlab" is spelt differently from "o'g'rilik", so each crime carries its legal term
-    (r"ogirl|ogri|ugirl|ukral|kraj", ["ozbekiston respublikasining jinoyat kodeksi"], "ogrilik"),
+    (r"ogirl|ogri|ugirl|ukral|kraj", ["ozbekiston respublikasining jinoyat kodeksi", "jinoyat-protsessual"],
+     "ogrilik jinoyatga oid arizalar xabarlar"),
+    (r"yo.?l haqi|chiptasiz|chipta ol|bilet", ["mamuriy javobgarlik togrisidagi kodeksi"], "transportda chiptasiz yurish"),
     (r"firib|aldab|aldash|aldov|"
      r"aldadi|pulimni olib|kartamdan|moshen|obman",
      ["ozbekiston respublikasining jinoyat kodeksi"], "firibgarlik"),
@@ -388,33 +390,53 @@ def candidate_list(cands) -> tuple[str, list]:
     return "\n".join(lines), kept
 
 
-async def pick_articles(question: str, query: str, doc_ids: list[int]) -> list:
-    """AI reads ~150 candidate article titles and picks by meaning; [] means 'fall back to plain search'."""
-    cands = await db.candidates(query, doc_ids or [])
+def title_hits(question: str, cands) -> list:
+    """Articles whose title the question spells out ("nomusga tegish" -> "118-modda. Nomusga tegish"): every
+    meaningful word of a 2+ word title is in the question. Deterministic, so it works even when the AI is down."""
+    asked = db.stems(normalize(question))
+    hits, seen = [], set()
+    for c in cands:
+        if "modda" not in c["article"] or (c["doc_id"], c["article"]) in seen:
+            continue
+        seen.add((c["doc_id"], c["article"]))
+        title = db.stems(normalize(c["article"].split(".", 1)[-1]))
+        if len(title) >= 2 and title <= asked:
+            hits.append(c)
+    return hits[:3]
+
+
+async def pick_articles(question: str, query: str, cands) -> list:
+    """AI reads ~80 candidate article titles and picks by meaning; [] means 'fall back to plain search'."""
     if not cands:
         return []
     listing, kept = candidate_list(cands)
     plan = await asyncio.wait_for(llm.generate_json(
         f"SAVOL: {question}\n\nQIDIRUV ATAMALARI: {query}\n\nMODDALAR:\n{listing}", PICK_SYSTEM, PICK_SCHEMA,
-        models=config.LITE_MODELS, timeout=6), 9)
+        models=config.LITE_MODELS, timeout=8), 15)
     keys = [(kept[i - 1]["id"], kept[i - 1]["doc_id"]) for i in dict.fromkeys(plan.get("ids") or [])
             if isinstance(i, int) and 0 < i <= len(kept)]
     return await db.chunks_by_id(keys[:8]) if keys else []
 
 
 async def retrieve(query: str, doc_ids: list[int] | None = None, question: str = "") -> list:
-    """With the user's question, an AI picks the articles by meaning; plain hybrid search fills the rest
-    and is the fallback whenever the picker fails."""
+    """With the user's question: articles the question names by title first, then the AI's picks by meaning,
+    then plain hybrid search — which alone remains when the AI is unavailable."""
     rows = await _search(query, doc_ids)
     if not question:
         return rows
+    cands = await db.candidates(f"{query} {question}", doc_ids or [])
+    named = await db.chunks_by_id([(c["id"], c["doc_id"]) for c in title_hits(question, cands)])
     try:
-        picked = await pick_articles(question, query, doc_ids or [])
+        picked = await pick_articles(question, query, cands)
     except Exception as exc:  # the answer must not depend on one more model call succeeding
         log.warning("article picker failed (%s), using plain search", type(exc).__name__)
-        return rows
-    seen = {(r["url"], r["article"]) for r in picked}
-    return (picked + [r for r in rows if (r["url"], r["article"]) not in seen])[:8]
+        picked = []
+    out, seen = [], set()
+    for r in named + picked + rows:
+        if (r["url"], r["article"]) not in seen:
+            seen.add((r["url"], r["article"]))
+            out.append(r)
+    return out[:8]
 
 
 async def _search(query: str, doc_ids: list[int] | None = None) -> list:

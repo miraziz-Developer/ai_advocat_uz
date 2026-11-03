@@ -331,6 +331,11 @@ def _stem(w: str) -> str:
     return stem[:-1] if len(stem) > 4 and stem[-1] in "kq" else stem
 
 
+def stems(text: str) -> set[str]:
+    """Meaningful word stems, the same way keyword search cuts them (stopwords and 1-2 letter words dropped)."""
+    return {_stem(w) for w in re.findall(r"\w+", text.lower().replace("'", "")) if w not in _STOP and len(w) >= 3}
+
+
 def or_query(text: str) -> str:
     """Any-word prefix match ('mehn:* | shartn:* | ...'). Uzbek adds suffixes (bola-lar-iga), so each word is
     cut to a short stem; AND of 15 words would almost never match."""

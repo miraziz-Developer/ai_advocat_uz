@@ -307,8 +307,13 @@ async def test_retrieve_falls_back_when_picker_fails(monkeypatch):
     async def broken(*args):
         raise TimeoutError
 
+    async def no_cands(*args):
+        return []
+
     monkeypatch.setattr(rag, "_search", search)
     monkeypatch.setattr(rag, "pick_articles", broken)
+    monkeypatch.setattr(rag.db, "candidates", no_cands)
+    monkeypatch.setattr(rag.db, "chunks_by_id", no_cands)
     assert await rag.retrieve("q", [1], question="savol") == plain
 
 
@@ -325,3 +330,13 @@ def test_repealed_acts_are_detected():
     assert lexuz.repealed("<p>Hujjat kuchini yo'qotgan 01.06.2017</p>") == "01.06.2017"
     # an in-force code mentions other acts that lost force: not the same thing
     assert lexuz.repealed("<p>2014 yil 4-son qarorga asosan ўз кучини йўқотган — ЎР ҚҲТ</p>") is None
+
+
+def test_title_hits_when_question_names_the_article():
+    def c(i, art):
+        return {"id": i, "doc_id": 111453, "article": art}
+    cands = [c(1, "119-modda. Jinsiy ehtiyojni g'ayritabiiy usulda zo'rlik ishlatib qondirish"),
+             c(2, "118-modda. Nomusga tegish"), c(3, "183-modda. Mayda bezorilik"), c(4, "Kirish")]
+    assert [h["id"] for h in rag.title_hits("nomusga tegish sanksiyasi", cands)] == [2]
+    assert [h["id"] for h in rag.title_hits("mayda bezorilik uchun qancha jarima", cands)] == [3]
+    assert rag.title_hits("qo'shnim musiqa qo'yadi", cands) == []
